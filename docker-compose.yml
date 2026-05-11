@@ -9,5 +9,18 @@ services:
     volumes:
       - scraper-data:/app/data
 
+  pararius-funda-sidecar:
+    build: ./python-sidecar
+    container_name: pararius-funda-sidecar
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS}
+      - DB_PATH=data/db.sqlite
+      - CHECK_INTERVAL=300
+      - DEBUG_DUMP=false
+    volumes:
+      - scraper-data:/app/data
+
 volumes:
   scraper-data:

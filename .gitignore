@@ -1,6 +1,9 @@
 db.sqlite
 data/
 .idea/
+__pycache__/
+*.pyc
+.venv/
 
 ### Node template
 # Logs
