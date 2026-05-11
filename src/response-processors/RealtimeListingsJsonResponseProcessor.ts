@@ -12,7 +12,9 @@ type RealtimeListingsJsonHouseResponse = {
   photo: string;
   statusOrig: string;
   isSales: boolean;
+  isRentals: boolean;
   salesPrice: number;
+  rentalsPrice: number;
 };
 
 function isRealtimeListingsJsonHouseResponse(
@@ -42,24 +44,39 @@ function isRealtimeListingsJsonHouseResponse(
     typeof obj.statusOrig === "string" &&
     "isSales" in obj &&
     typeof obj.isSales === "boolean" &&
+    "isRentals" in obj &&
+    typeof obj.isRentals === "boolean" &&
     "salesPrice" in obj &&
-    typeof obj.salesPrice === "number"
+    typeof obj.salesPrice === "number" &&
+    "rentalsPrice" in obj &&
+    typeof obj.rentalsPrice === "number"
   );
 }
 
 export class RealtimeListingsJsonResponseProcessor
   implements IMakelaarResponseProcessor
 {
+  private static readonly DELFT_AREA_CITIES = [
+    "Delft",
+    "Delfgauw",
+    "Den Hoorn",
+    "Rijswijk",
+    "Schipluiden",
+    "Nootdorp",
+    "Pijnacker",
+  ];
+
   private isWithinOurCriteria(
     response: RealtimeListingsJsonHouseResponse,
   ): boolean {
     return (
-      response.city === "Delft" &&
-      response.isSales &&
-      response.salesPrice <= 435000 &&
-      response.bedrooms >= 2 &&
-      response.livingSurface >= 68 &&
-      response.statusOrig !== "sold"
+      RealtimeListingsJsonResponseProcessor.DELFT_AREA_CITIES.includes(
+        response.city,
+      ) &&
+      response.isRentals &&
+      response.rentalsPrice <= 1500 &&
+      response.bedrooms >= 1 &&
+      response.statusOrig === "available"
     );
   }
 

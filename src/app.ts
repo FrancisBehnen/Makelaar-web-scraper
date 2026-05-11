@@ -1,52 +1,14 @@
 import axios from "axios";
 import * as fs from "node:fs";
-import { Makelaar, PlatformType } from "./makelaar";
+import { Makelaar } from "./makelaar";
 import { IHuis } from "./Huis";
 import { IMessenger, TelegramMessenger } from "./telegram";
 import { IDatabase, SQLiteDatabase } from "./database";
 import domProcessors from "./response-processors";
+import { makelaars } from "./makelaars";
 
 const USE_DEBUG_HTML = false;
 const CHECK_INTERVAL = 1000 * 60 * 5; // 5 minutes
-
-const makelaars: Makelaar[] = [
-  {
-    name: "van Silfhout & Hogetoorn",
-    url: "https://www.vansilfhout.nl/",
-    scrapeUrl:
-      "https://www.vansilfhout.nl/woningaanbod/?fwp_status=te-koop&fwp_locaties=delfgauw%2Cdelft%2Cden-hoorn%2Crijswijk&fwp_koopprijs=18500.00%2C434500.00&fwp_oppervlakte=68.00%2C124.00&fwp_kamers=3.00%2C99.00",
-    debugResponseFile: "test-wordpress-silfhout-hogetoorn-1-house.html",
-    platformType: PlatformType.VanSilfhoutEnHogetoorn,
-  },
-  {
-    name: "van Silfhout & Hogetoorn Page 2",
-    url: "https://www.vansilfhout.nl/",
-    scrapeUrl:
-      "https://www.vansilfhout.nl/woningaanbod/?fwp_status=te-koop&fwp_locaties=delfgauw%2Cdelft%2Cden-hoorn%2Crijswijk&fwp_koopprijs=18500.00%2C434500.00&fwp_oppervlakte=68.00%2C124.00&fwp_kamers=3.00%2C99.00&fwp_paged=2",
-    platformType: PlatformType.VanSilfhoutEnHogetoorn,
-  },
-  {
-    name: "van Silfhout & Hogetoorn Page 3",
-    url: "https://www.vansilfhout.nl/",
-    scrapeUrl:
-      "https://www.vansilfhout.nl/woningaanbod/?fwp_status=te-koop&fwp_locaties=delfgauw%2Cdelft%2Cden-hoorn%2Crijswijk&fwp_koopprijs=18500.00%2C434500.00&fwp_oppervlakte=68.00%2C124.00&fwp_kamers=3.00%2C99.00&fwp_paged=3",
-    platformType: PlatformType.VanSilfhoutEnHogetoorn,
-  },
-  {
-    name: "van Daal Makelaardij",
-    url: "https://vandaalmakelaardij.nl/",
-    scrapeUrl:
-      "https://www.vandaalmakelaardij.nl/nl/realtime-listings/consumer?pageKey=",
-    debugResponseFile: "test-vandaal-makelaardij.json",
-    platformType: PlatformType.RealtimeListingsJson,
-  },
-  {
-    name: "Björnd Makelaardij",
-    url: "https://bjornd.nl/",
-    scrapeUrl: "https://www.bjornd.nl/nl/realtime-listings/consumer",
-    platformType: PlatformType.RealtimeListingsJson,
-  },
-];
 
 class App {
   readonly db: IDatabase;
