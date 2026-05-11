@@ -14,7 +14,7 @@ export interface IDatabase {
 export class SQLiteDatabase implements IDatabase {
   private db?: Database;
 
-  constructor(private dbPath: string = "db.sqlite") {}
+  constructor(private dbPath: string = "data/db.sqlite") {}
 
   public connect() {
     this.db = new Database(this.dbPath);

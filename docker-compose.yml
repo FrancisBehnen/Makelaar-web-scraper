@@ -1,0 +1,13 @@
+services:
+  makelaar-scraper:
+    image: ghcr.io/francisbehnen/makelaar-web-scraper:main
+    container_name: makelaar-scraper
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS}
+    volumes:
+      - scraper-data:/app/data
+
+volumes:
+  scraper-data:

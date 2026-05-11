@@ -8,6 +8,8 @@ RUN bun install --frozen-lockfile
 
 COPY . .
 
+RUN mkdir -p data
+
 ENV NODE_ENV=production
 
 ENTRYPOINT ["bun", "src/app.ts"]
