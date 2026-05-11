@@ -1,14 +1,13 @@
-FROM node:20
+FROM oven/bun:1
 
 WORKDIR /app
 
-COPY package*.json yarn.lock ./
+COPY package.json bun.lock ./
 
-RUN yarn install
+RUN bun install --frozen-lockfile
 
 COPY . .
 
 ENV NODE_ENV=production
 
-RUN yarn build
-ENTRYPOINT ["yarn", "start"]
+ENTRYPOINT ["bun", "src/app.ts"]
