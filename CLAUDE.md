@@ -1,5 +1,11 @@
 # Makelaar Web Scraper
 
+## Python Sidecar (Pararius & Funda)
+
+Scrapling-based scraper in `python-sidecar/`. Bypasses Cloudflare via StealthyFetcher, writes to the same SQLite DB as the Bun app, sends its own Telegram notifications.
+
+Before adding new sites, read [`python-sidecar/ADDING-SITES.md`](python-sidecar/ADDING-SITES.md) — it covers Scrapling API gotchas, selector development workflow, and deployment steps.
+
 ## Hostinger VPS
 
 Deployment target for this project.
