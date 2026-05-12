@@ -52,7 +52,7 @@ RENTAROOM_URL = "https://rent-a-room-delft.nl/grid-default/"
 FRISIA_URL = (
     "https://frisiamakelaars.nl/wonen/aanbod"
     "?buy_rent=rent&rent_price=-1500&distance=5"
-    "&search=delft&order_by=created_at-desc&page=1"
+    "&search=delft&order_by=created_at-desc&page={page}"
 )
 OUDEDELFT_URL = "https://oudedelft.com/huur-2/"
 PSGWONEN_URL = "https://www.psg-wonen.nl/woningaanbod/huur"
@@ -1245,6 +1245,41 @@ SITES = [
 ]
 
 
+def _scrape_paginated(name, url_template, parser, existing_urls):
+    """Scrape all pages of a paginated site until the page is empty."""
+    seen_urls: set[str] = set()
+    houses: list[dict[str, str]] = []
+    max_pages = 20
+    empty_streak = 0
+
+    for page_num in range(1, max_pages + 1):
+        url = url_template.format(page=page_num)
+        log.info("Fetching %s page %d ...", name, page_num)
+        page = StealthyFetcher.fetch(
+            url, headless=True, solve_cloudflare=True, network_idle=True,
+        )
+        page_houses = parser(page)
+        if not page_houses:
+            break
+
+        new_on_page = [
+            h for h in page_houses
+            if h["url"] not in existing_urls and h["url"] not in seen_urls
+        ]
+        for h in new_on_page:
+            seen_urls.add(h["url"])
+            houses.append(h)
+
+        if new_on_page:
+            empty_streak = 0
+        else:
+            empty_streak += 1
+            if empty_streak >= 3:
+                break
+
+    return houses
+
+
 def run_cycle():
     conn = init_db()
     existing_urls = get_existing_urls(conn)
@@ -1252,21 +1287,25 @@ def run_cycle():
 
     for name, url, parser in SITES:
         try:
-            log.info("Fetching %s ...", name)
-            page = StealthyFetcher.fetch(
-                url,
-                headless=True,
-                solve_cloudflare=True,
-                network_idle=True,
-            )
-            houses = parser(page)
-            new_houses = [h for h in houses if h["url"] not in existing_urls]
-            log.info("%s: %d scraped, %d new", name, len(houses), len(new_houses))
+            if "{page}" in url:
+                houses = _scrape_paginated(name, url, parser, existing_urls)
+                log.info("%s: %d new across all pages", name, len(houses))
+            else:
+                log.info("Fetching %s ...", name)
+                page = StealthyFetcher.fetch(
+                    url,
+                    headless=True,
+                    solve_cloudflare=True,
+                    network_idle=True,
+                )
+                all_houses = parser(page)
+                houses = [h for h in all_houses if h["url"] not in existing_urls]
+                log.info("%s: %d scraped, %d new", name, len(all_houses), len(houses))
 
-            if new_houses:
-                save_houses(conn, new_houses)
-                all_new.extend(new_houses)
-                existing_urls.update(h["url"] for h in new_houses)
+            if houses:
+                save_houses(conn, houses)
+                all_new.extend(houses)
+                existing_urls.update(h["url"] for h in houses)
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
