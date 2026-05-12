@@ -47,7 +47,7 @@ PRINSENSTAD_URL = (
     "?availability=1&pricerange.maxprice=1500"
 )
 PACTUM_URL = "https://www.pactumvastgoed.nl/huurwoningen"
-VWMAKELAARS_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/"
+VWMAKELAARS_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/"
 RENTAROOM_URL = "https://rent-a-room-delft.nl/grid-default/"
 FRISIA_URL = (
     "https://frisiamakelaars.nl/wonen/aanbod/"
@@ -484,6 +484,9 @@ def _scrape_realworks(page, base_url: str, site_name: str) -> list[dict[str, str
             if not href:
                 continue
             url = make_absolute(href, base_url)
+
+            if "/koop/" in url or "/verkocht/" in url:
+                continue
 
             address = _first_text(listing, "h3.street-address")
             city = _first_text(listing, "span.locality")
