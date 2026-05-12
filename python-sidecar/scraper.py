@@ -336,68 +336,51 @@ def scrape_vbt(page) -> list[dict[str, str]]:
     dump_html(page, "vbt")
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".residence-card",
-        ".property-card",
-        ".woning-card",
-        "a[href*='/woning/']",
-    )
+    listings = page.css("a.property")
     log.info("VBT: %d listing elements found", len(listings))
 
     for listing in listings:
         try:
             href = listing.attrib.get("href", "")
             if not href:
-                link_els = listing.css("a[href*='/woning/']")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
-            if not href:
                 continue
             url = make_absolute(href, "https://vbtverhuurmakelaars.nl")
 
-            all_text = (listing.get_all_text() or "").strip()
+            items = listing.css(".items")
+            if not items:
+                continue
+            container = items[0]
 
-            price = ""
+            city_el = container.css("div")
+            city = (
+                (city_el[0].text or city_el[0].get_all_text() or "").strip()
+                if city_el else ""
+            )
+
+            addr_el = container.css("span.normal")
+            address = (
+                (addr_el[0].text or addr_el[0].get_all_text() or "").strip()
+                if addr_el else ""
+            )
+
+            price_el = container.css(".price")
+            price = (
+                (price_el[0].text or price_el[0].get_all_text() or "").strip()
+                if price_el else ""
+            )
+
             area = ""
             rooms = ""
-            city = ""
-            address = ""
-
-            price_match = re.search(r"€\s*[\d.,]+,-?", all_text)
-            if price_match:
-                price = price_match.group(0).strip()
-
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
-
-            rooms_match = re.search(
-                r"(\d+)\s*[Kk]amer", all_text
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
-
-            city_el = listing.css(".city, .plaats, .location-city")
-            if city_el:
-                city = (city_el[0].text or "").strip()
-            else:
-                for known_city in DELFT_AREA_CITIES:
-                    if known_city.lower() in all_text.lower():
-                        city = known_city.title()
-                        break
-
-            address_el = listing.css(
-                ".address, .street, .straatnaam, h2, h3"
-            )
-            if address_el:
-                address = (address_el[0].text or "").strip()
-
-            if not address and "/woning/" in href:
-                slug = href.split("/woning/")[-1].rstrip("/")
-                parts = slug.rsplit("-", 1)
-                if len(parts) >= 1:
-                    address = parts[0].replace("-", " ").title()
+            rows = container.css("table tr")
+            for row in rows:
+                cells = row.css("td")
+                if len(cells) >= 2:
+                    label = (cells[0].text or "").strip().lower()
+                    value = (cells[1].text or "").strip()
+                    if "woonoppervlakte" in label:
+                        area = value
+                    elif "kamer" in label:
+                        rooms = value
 
             if city and not is_delft_area(city):
                 continue
@@ -430,64 +413,34 @@ def scrape_marloes(page) -> list[dict[str, str]]:
     dump_html(page, "marloes")
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".property-item",
-        ".woning-item",
-        ".object-item",
-        "a[href*='/woning/']",
-    )
+    listings = page.css("article.object")
     log.info("Marloes: %d listing elements found", len(listings))
 
     for listing in listings:
         try:
-            href = listing.attrib.get("href", "")
-            if not href:
-                link_els = listing.css("a[href*='/woning/']")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
+            link_els = listing.css("a")
+            href = link_els[0].attrib.get("href", "") if link_els else ""
             if not href:
                 continue
             url = make_absolute(href, "https://www.marloesmakelaars.nl")
 
-            address = _first_text(listing, "h3", "h2", ".address", ".title")
-
-            price = _first_text(listing, "h4", ".price", ".vraagprijs")
-            if not price:
-                all_text = listing.get_all_text() or ""
-                price_match = re.search(r"€\s*[\d.,]+", all_text)
-                if price_match:
-                    price = price_match.group(0).strip()
+            address = _first_text(listing, "h2")
+            price = _first_text(listing, "h4")
 
             city = ""
             area = ""
             rooms = ""
-            all_text = listing.get_all_text() or ""
-
-            city_match = re.search(
-                r"(?:Plaats|Stad|City)[:\s]*(\w[\w\s]*)", all_text
-            )
-            if city_match:
-                city = city_match.group(1).strip()
-            elif "DELFT" in all_text.upper():
-                city = "Delft"
-
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
-
-            rooms_match = re.search(
-                r"(?:Slaapkamer|Kamer)s?\s*[:\s]*(\d+)", all_text,
-                re.IGNORECASE,
-            )
-            if rooms_match:
-                rooms = f"{rooms_match.group(1)} kamers"
-            else:
-                rooms_match2 = re.search(
-                    r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-                )
-                if rooms_match2:
-                    rooms = rooms_match2.group(0).strip()
+            dts = listing.css("dt")
+            dds = listing.css("dd")
+            for dt, dd in zip(dts, dds):
+                label = (dt.text or "").strip().lower()
+                val = (dd.text or "").strip()
+                if "plaats" in label:
+                    city = val
+                elif "oppervlakte" in label:
+                    area = val
+                elif "slaapkamer" in label or "kamer" in label:
+                    rooms = val
 
             houses.append(
                 {
@@ -509,56 +462,30 @@ def scrape_marloes(page) -> list[dict[str, str]]:
 # Hof van Delft parser
 # ---------------------------------------------------------------------------
 
-def scrape_hofvandelft(page) -> list[dict[str, str]]:
-    dump_html(page, "hofvandelft")
+def _scrape_realworks(page, base_url: str, site_name: str) -> list[dict[str, str]]:
+    dump_html(page, site_name.lower().replace(" ", ""))
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".aanbodEntry",
-        ".aanbodEntryWrap",
-        ".object_item",
-        ".objectcontainer",
-        "a[href*='/object/']",
-        ".property-card",
-        ".woning",
-    )
-    log.info("Hof van Delft: %d listing elements found", len(listings))
+    listings = _find_elements(page, "li.aanbodEntry", ".al2woning", ".al4woning")
+    log.info("%s: %d listing elements found", site_name, len(listings))
 
     for listing in listings:
         try:
-            href = listing.attrib.get("href", "")
-            if not href:
-                link_els = listing.css("a")
-                for el in link_els:
-                    h = el.attrib.get("href", "")
-                    if h and "/object/" in h or "/woning/" in h:
-                        href = h
-                        break
-                if not href and link_els:
-                    href = link_els[0].attrib.get("href", "")
+            link_els = listing.css("a.aanbodEntryLink")
+            if not link_els:
+                continue
+            href = link_els[0].attrib.get("href", "")
             if not href:
                 continue
-            url = make_absolute(href, "https://www.hofvandelft.nl")
+            url = make_absolute(href, base_url)
 
-            address = _first_text(
-                listing,
-                ".street-address", ".adres", ".objectTitle",
-                ".straatnaam", "h2", "h3",
-            )
-            city = _first_text(
-                listing,
-                ".locality", ".plaats", ".city",
-            )
+            address = _first_text(listing, "h3.street-address")
+            city = _first_text(listing, "span.locality")
+
+            price_el = listing.css("span.kenmerkValue")
+            price = (price_el[0].text or "").strip() if price_el else ""
 
             all_text = listing.get_all_text() or ""
-
-            price = _first_text(listing, ".price", ".vraagprijs", ".huurprijs")
-            if not price:
-                price_match = re.search(r"€\s*[\d.,]+", all_text)
-                if price_match:
-                    price = price_match.group(0).strip()
-
             area = ""
             area_match = re.search(r"(\d+)\s*m[²2]", all_text)
             if area_match:
@@ -582,9 +509,13 @@ def scrape_hofvandelft(page) -> list[dict[str, str]]:
                 }
             )
         except Exception as exc:
-            log.warning("Hof van Delft: failed to parse a listing: %s", exc)
+            log.warning("%s: failed to parse a listing: %s", site_name, exc)
 
     return houses
+
+
+def scrape_hofvandelft(page) -> list[dict[str, str]]:
+    return _scrape_realworks(page, "https://www.hofvandelft.nl", "Hof van Delft")
 
 
 # ---------------------------------------------------------------------------
@@ -595,64 +526,51 @@ def scrape_123wonen(page) -> list[dict[str, str]]:
     dump_html(page, "123wonen")
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".property-card",
-        ".object-card",
-        ".search-result",
-        "a[href*='/huur/']",
-        ".listing-item",
-    )
+    listings = page.css("div.pandlist-container")
     log.info("123Wonen: %d listing elements found", len(listings))
 
     for listing in listings:
         try:
-            href = listing.attrib.get("href", "")
+            link_els = listing.css("a.textlink-design")
+            if not link_els:
+                link_els = listing.css("a")
+            href = link_els[0].attrib.get("href", "") if link_els else ""
             if not href:
-                link_els = listing.css("a[href*='/huur/']")
-                if not link_els:
-                    link_els = listing.css("a")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
+                onclick = listing.attrib.get("onclick", "")
+                m = re.search(r"location\.href='([^']+)'", onclick)
+                if m:
+                    href = m.group(1)
             if not href:
                 continue
             url = make_absolute(href, "https://www.123wonen.nl")
 
-            all_text = listing.get_all_text() or ""
+            address = _first_text(listing, "span.pand-address")
 
-            address = _first_text(
-                listing, ".street", ".address", "h2", "h3", ".title"
-            )
-
+            title_el = listing.css("div.pand-title")
             city = ""
-            location_match = re.search(
-                r"(Delft|Delfgauw|Den Hoorn|Rijswijk|Schipluiden|Nootdorp|Pijnacker)",
-                all_text,
-                re.IGNORECASE,
-            )
-            if location_match:
-                city = location_match.group(1).title()
+            if title_el:
+                title_text = (title_el[0].text or "").strip()
+                if "," in title_text:
+                    city = title_text.split(",")[0].strip()
 
-            price = ""
-            price_match = re.search(r"€\s*[\d.,]+", all_text)
-            if price_match:
-                price = price_match.group(0).strip()
+            price = _first_text(listing, "div.pand-price")
 
             price_val = parse_price_euros(price)
             if price_val and price_val > MAX_PRICE:
                 continue
 
             area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
-
             rooms = ""
-            rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
+            spec_items = listing.css("div.pand-specs li")
+            for item in spec_items:
+                spans = item.css("span")
+                if len(spans) >= 2:
+                    label = (spans[0].text or "").strip().lower()
+                    value = (spans[1].text or "").strip()
+                    if "oppervlakte" in label:
+                        area = value
+                    elif "slaapkamer" in label:
+                        rooms = value
 
             houses.append(
                 {
@@ -678,64 +596,43 @@ def scrape_rotsvast(page) -> list[dict[str, str]]:
     dump_html(page, "rotsvast")
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".property-card",
-        ".object-card",
-        "a[href*='/huren/']",
-        ".listing",
-    )
+    listings = page.css("a.card.card--house")
     log.info("Rotsvast: %d listing elements found", len(listings))
 
     for listing in listings:
         try:
             href = listing.attrib.get("href", "")
             if not href:
-                link_els = listing.css("a[href*='/huren/']")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
-            if not href or "/huren/" not in href:
                 continue
             url = make_absolute(href, "https://www.rotsvast.nl")
 
-            all_text = listing.get_all_text() or ""
-            children = listing.css("div, span, p")
+            address = _first_text(listing, ".card-house__title")
 
-            city = ""
-            address = ""
-            price = ""
-
-            for child in children:
-                txt = (child.text or "").strip()
-                if not txt:
-                    continue
-                if "€" in txt:
-                    price = txt
-                elif txt in (
-                    "Delft", "Delfgauw", "Den Hoorn", "Rijswijk",
-                    "Schipluiden", "Nootdorp", "Pijnacker",
-                ):
-                    city = txt
-                elif (
-                    not address
-                    and "€" not in txt
-                    and "m²" not in txt
-                    and not txt.startswith("Direct")
-                    and txt not in ("Kaal", "Gestoffeerd", "Gemeubileerd")
-                ):
-                    address = txt
+            text_els = listing.css(".card-house__text")
+            city = (text_els[0].text or "").strip() if text_els else ""
+            price = (text_els[-1].text or "").strip() if text_els else ""
 
             area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
+            area_li = listing.css("li")
+            for li in area_li:
+                icons = li.css(".icon-surface")
+                if icons:
+                    area = (li.text or li.get_all_text() or "").strip()
+                    break
 
             rooms = ""
-            rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
+            for li in area_li:
+                icons = li.css(".icon-bed")
+                if icons:
+                    rooms = (li.text or li.get_all_text() or "").strip()
+                    break
+
+            if city and not is_delft_area(city):
+                continue
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
 
             houses.append(
                 {
@@ -763,11 +660,9 @@ def scrape_prinsenstad(page) -> list[dict[str, str]]:
 
     listings = _find_elements(
         page,
-        ".object-item",
-        ".property-card",
-        ".aanbodEntry",
-        "[class*='object']",
-        "a[href*='/object/']",
+        ".object_list_container .object_data",
+        ".object_list_container a[href*='/object/']",
+        "div.object_list a[href]",
     )
     log.info("Prinsenstad: %d listing elements found", len(listings))
 
@@ -775,7 +670,7 @@ def scrape_prinsenstad(page) -> list[dict[str, str]]:
         try:
             href = listing.attrib.get("href", "")
             if not href:
-                link_els = listing.css("a")
+                link_els = listing.css("a[href]")
                 if link_els:
                     href = link_els[0].attrib.get("href", "")
             if not href:
@@ -784,9 +679,9 @@ def scrape_prinsenstad(page) -> list[dict[str, str]]:
 
             all_text = listing.get_all_text() or ""
             address = _first_text(
-                listing, ".address", ".street", "h2", "h3", ".title"
+                listing, ".street_name", ".address", "h2", "h3"
             )
-            city = _first_text(listing, ".city", ".plaats", ".locality")
+            city = _first_text(listing, ".city", ".locality")
 
             price = ""
             price_match = re.search(r"€\s*[\d.,]+", all_text)
@@ -832,9 +727,6 @@ def scrape_pactum(page) -> list[dict[str, str]]:
     listings = _find_elements(
         page,
         ".w-dyn-item",
-        ".property-card",
-        ".woning-card",
-        "[class*='property']",
         ".collection-item",
     )
     log.info("Pactum: %d listing elements found", len(listings))
@@ -918,75 +810,7 @@ def scrape_pactum(page) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 def scrape_vwmakelaars(page) -> list[dict[str, str]]:
-    dump_html(page, "vwmakelaars")
-    houses: list[dict[str, str]] = []
-
-    listings = _find_elements(
-        page,
-        ".aanbodEntry",
-        ".aanbodEntryWrap",
-        ".objectcontainer",
-        ".object_item",
-        "a[href*='/object/']",
-        ".property-card",
-    )
-    log.info("VW Makelaars: %d listing elements found", len(listings))
-
-    for listing in listings:
-        try:
-            href = listing.attrib.get("href", "")
-            if not href:
-                link_els = listing.css("a")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
-            if not href:
-                continue
-            url = make_absolute(href, "https://delft.vwmakelaars.nl")
-
-            all_text = listing.get_all_text() or ""
-            address = _first_text(
-                listing,
-                ".street-address", ".adres", ".objectTitle",
-                ".straatnaam", "h2", "h3",
-            )
-            city = _first_text(listing, ".locality", ".plaats", ".city")
-
-            price = _first_text(listing, ".price", ".vraagprijs", ".huurprijs")
-            if not price:
-                price_match = re.search(r"€\s*[\d.,]+", all_text)
-                if price_match:
-                    price = price_match.group(0).strip()
-
-            area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
-
-            rooms = ""
-            rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
-
-            price_val = parse_price_euros(price)
-            if price_val and price_val > MAX_PRICE:
-                continue
-
-            houses.append(
-                {
-                    "url": url,
-                    "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": city or "Delft",
-                    "vraagprijs": price,
-                    "oppervlakte": area,
-                    "kamers": rooms,
-                }
-            )
-        except Exception as exc:
-            log.warning("VW Makelaars: failed to parse a listing: %s", exc)
-
-    return houses
+    return _scrape_realworks(page, "https://delft.vwmakelaars.nl", "VW Makelaars")
 
 
 # ---------------------------------------------------------------------------
@@ -997,48 +821,30 @@ def scrape_rentaroom(page) -> list[dict[str, str]]:
     dump_html(page, "rentaroom")
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".es-listing",
-        ".property-card",
-        ".es-property",
-        "a[href*='/property/']",
-        ".listing-item",
-    )
+    listings = page.css("div.item-listing-wrap")
     log.info("Rent a Room: %d listing elements found", len(listings))
 
     for listing in listings:
         try:
-            href = listing.attrib.get("href", "")
-            if not href:
-                link_els = listing.css("a[href*='/property/']")
-                if not link_els:
-                    link_els = listing.css("a")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
+            title_link = listing.css("h2.item-title a")
+            if not title_link:
+                continue
+            href = title_link[0].attrib.get("href", "")
             if not href:
                 continue
             url = make_absolute(href, "https://rent-a-room-delft.nl")
 
-            all_text = listing.get_all_text() or ""
-            address = _first_text(listing, "h2", "h3", ".title", ".address")
+            title_text = (title_link[0].text or "").strip()
+            address = title_text
+            if "," in title_text:
+                address = title_text.rsplit(",", 1)[0].strip()
 
-            price = ""
-            price_match = re.search(r"€\s*[\d.,]+", all_text)
-            if price_match:
-                price = price_match.group(0).strip()
+            price = _first_text(listing, "li.item-price")
 
-            area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
+            area_el = listing.css("li.h-area span.hz-figure")
+            area = f"{(area_el[0].text or '').strip()} m²" if area_el else ""
 
             rooms = ""
-            rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
 
             houses.append(
                 {
@@ -1064,52 +870,41 @@ def scrape_frisia(page) -> list[dict[str, str]]:
     dump_html(page, "frisia")
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(
-        page,
-        ".property-card",
-        ".object-card",
-        ".woning-item",
-        "a[href*='/wonen/']",
-        ".listing-item",
-        ".search-result",
-    )
+    listings = page.css(".card.card--object")
     log.info("Frisia: %d listing elements found", len(listings))
 
     for listing in listings:
         try:
-            href = listing.attrib.get("href", "")
-            if not href:
-                link_els = listing.css("a[href*='/wonen/']")
-                if not link_els:
-                    link_els = listing.css("a")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
+            link_els = listing.css("a.card__anchor")
+            if not link_els:
+                continue
+            href = link_els[0].attrib.get("href", "")
             if not href:
                 continue
             url = make_absolute(href, "https://frisiamakelaars.nl")
 
-            all_text = listing.get_all_text() or ""
-            address = _first_text(
-                listing, ".address", ".street", "h2", "h3", ".title"
-            )
-            city = _first_text(listing, ".city", ".plaats", ".location")
+            address = _first_text(listing, ".card--default__body h5", "h5")
 
-            price = ""
-            price_match = re.search(r"€\s*[\d.,]+", all_text)
-            if price_match:
-                price = price_match.group(0).strip()
+            city = ""
+            city_els = listing.css(".card--default__body small")
+            if city_els:
+                city_text = (city_els[0].text or "").strip()
+                if "," in city_text:
+                    city = city_text.split(",")[-1].strip()
+
+            price_el = listing.css(".card--default__footer strong")
+            price = (price_el[0].text or "").strip() if price_el else ""
 
             area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
-
             rooms = ""
-            rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
+            features = listing.css(".features li")
+            for feat in features:
+                small = feat.css("small")
+                val = (small[0].text or "").strip() if small else ""
+                if feat.css(".icon-livearea"):
+                    area = val
+                elif feat.css(".icon-door"):
+                    rooms = val
 
             houses.append(
                 {
@@ -1128,7 +923,9 @@ def scrape_frisia(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Oude Delft parser (WordPress + JS plugin)
+# Oude Delft parser (WordPress + AngularJS LSCF plugin)
+# Content is rendered client-side by AngularJS; StealthyFetcher may not
+# trigger the Angular digest cycle, so this parser may return 0 results.
 # ---------------------------------------------------------------------------
 
 def scrape_oudedelft(page) -> list[dict[str, str]]:
@@ -1137,13 +934,8 @@ def scrape_oudedelft(page) -> list[dict[str, str]]:
 
     listings = _find_elements(
         page,
-        ".property-card",
-        ".woning-item",
-        ".object-item",
-        "a[href*='/woning/']",
-        "a[href*='/huur/']",
-        ".listing-item",
-        ".es-listing",
+        ".lscf-posts-wrapper a[href*='oudedelft.com']",
+        ".lscf-custom-template-wrapper a[href]",
     )
     log.info("Oude Delft: %d listing elements found", len(listings))
 
