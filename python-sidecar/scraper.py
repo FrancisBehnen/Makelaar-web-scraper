@@ -50,7 +50,7 @@ PACTUM_URL = "https://www.pactumvastgoed.nl/huurwoningen"
 VWMAKELAARS_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/"
 RENTAROOM_URL = "https://rent-a-room-delft.nl/grid-default/"
 FRISIA_URL = (
-    "https://frisiamakelaars.nl/wonen/aanbod"
+    "https://frisiamakelaars.nl/wonen/aanbod/"
     "?buy_rent=rent&rent_price=-1500&distance=5"
     "&search=delft&order_by=created_at-desc&page={page}"
 )
@@ -888,6 +888,9 @@ def scrape_frisia(page) -> list[dict[str, str]]:
             if not href:
                 continue
             url = make_absolute(href, "https://frisiamakelaars.nl")
+
+            if "/verkocht-verhuurd/" in url or "/wonen/koop/" in url:
+                continue
 
             address = _first_text(listing, ".card--default__body h5", "h5")
 
