@@ -901,6 +901,10 @@ def scrape_frisia(page) -> list[dict[str, str]]:
             price_el = listing.css(".card--default__footer strong")
             price = (price_el[0].text or "").strip() if price_el else ""
 
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
             area = ""
             rooms = ""
             features = listing.css(".features li")
