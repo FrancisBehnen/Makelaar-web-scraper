@@ -55,6 +55,12 @@ FRISIA_URL = (
     "&search=delft&order_by=created_at-desc&page=1"
 )
 OUDEDELFT_URL = "https://oudedelft.com/huur-2/"
+PSGWONEN_URL = "https://www.psg-wonen.nl/woningaanbod/huur"
+VANGULDEN_URL = "https://vanguldenmakelaardij.nl/huuraanbod/"
+ZOMAKELAARS_URL = (
+    "https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/"
+)
+IKWILHUREN_URL = "https://ikwilhuren.nu/aanbod/delft/"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1002,6 +1008,219 @@ def scrape_oudedelft(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# PSG Wonen parser (Haystack platform)
+# ---------------------------------------------------------------------------
+
+def scrape_psgwonen(page) -> list[dict[str, str]]:
+    dump_html(page, "psgwonen")
+    houses: list[dict[str, str]] = []
+
+    listings = page.css("article")
+    log.info("PSG Wonen: %d listing elements found", len(listings))
+
+    for listing in listings:
+        try:
+            link_els = listing.css("div.datacontainer a")
+            if not link_els:
+                continue
+            href = link_els[0].attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://www.psg-wonen.nl")
+
+            raw_address = _first_text(listing, "h3.obj_address")
+            address = re.sub(
+                r"^(Onder bod|Te huur|Verhuurd|Nieuw in verhuur)\s*:\s*",
+                "",
+                raw_address,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            city = ""
+            city_match = re.search(r"\d{4}\s*[A-Z]{2}\s+(.+)$", address)
+            if city_match:
+                city = city_match.group(1).strip()
+                address = address[: city_match.start()].strip().rstrip(",")
+
+            price = _first_text(listing, "span.obj_price")
+
+            rooms_el = listing.css("span.object_rooms span")
+            rooms = (rooms_el[-1].text or "").strip() if rooms_el else ""
+            if rooms and rooms.isdigit():
+                rooms = f"{rooms} kamers" if int(rooms) != 1 else "1 kamer"
+
+            area_el = listing.css("span.object_sqfeet span[title]")
+            area = (area_el[0].text or "").strip() if area_el else ""
+
+            if city and not is_delft_area(city):
+                continue
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or "Onbekend",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("PSG Wonen: failed to parse a listing: %s", exc)
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Van Gulden Makelaardij parser (MTMO / WordPress)
+# ---------------------------------------------------------------------------
+
+def scrape_vangulden(page) -> list[dict[str, str]]:
+    dump_html(page, "vangulden")
+    houses: list[dict[str, str]] = []
+
+    listings = page.css('a[href*="aanbod-detail"]')
+    log.info("Van Gulden: %d listing elements found", len(listings))
+
+    for listing in listings:
+        try:
+            href = listing.attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://vanguldenmakelaardij.nl")
+
+            address = _first_text(listing, "div.titel")
+            city = _first_text(listing, "p.notranslate")
+
+            price = _first_text(listing, "div.price")
+
+            area = ""
+            rooms = ""
+            kenmerken = listing.css("div.kenmerk")
+            for kenmerk in kenmerken:
+                img_els = kenmerk.css("img")
+                if not img_els:
+                    continue
+                alt = (img_els[0].attrib.get("alt", "") or "").lower()
+                val = (kenmerk.get_all_text() or "").strip()
+                if "woonoppervlakte" in alt:
+                    area = val
+                elif "kamers_icon" in alt:
+                    rooms = val
+
+            if city and not is_delft_area(city):
+                continue
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or "Delft",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("Van Gulden: failed to parse a listing: %s", exc)
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# ZO Makelaars parser (Realworks platform)
+# ---------------------------------------------------------------------------
+
+def scrape_zomakelaars(page) -> list[dict[str, str]]:
+    return _scrape_realworks(
+        page, "https://www.zomakelaars.nl", "ZO Makelaars"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ikwilhuren.nu parser (MVGM platform)
+# ---------------------------------------------------------------------------
+
+def scrape_ikwilhuren(page) -> list[dict[str, str]]:
+    dump_html(page, "ikwilhuren")
+    houses: list[dict[str, str]] = []
+
+    listings = page.css(".card.card-woning")
+    log.info("ikwilhuren.nu: %d listing elements found", len(listings))
+
+    for listing in listings:
+        try:
+            link_els = listing.css("a.stretched-link")
+            if not link_els:
+                continue
+            href = link_els[0].attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://ikwilhuren.nu")
+
+            title = (link_els[0].text or link_els[0].get_all_text() or "").strip()
+            address = re.sub(
+                r"^(Appartement|Eengezinswoning|Woonhuis|Studio)\s+",
+                "",
+                title,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            city_el = listing.css(".card-body > span:nth-child(2)")
+            raw_city = (
+                (city_el[0].text or city_el[0].get_all_text() or "").strip()
+                if city_el else ""
+            )
+            city = re.sub(r"^\d{4}\s*[A-Z]{2}\s+", "", raw_city)
+            city = re.sub(r"\s*-\s*\d+\s*Km\.?$", "", city).strip()
+
+            price = _first_text(listing, ".dotted-spans .fw-bold")
+
+            all_text = listing.get_all_text() or ""
+            area = ""
+            area_match = re.search(r"(\d+)\s*m[²2\s]", all_text)
+            if area_match:
+                area = f"{area_match.group(1)} m²"
+
+            rooms = ""
+            rooms_match = re.search(
+                r"(\d+)\s*slaapkamer", all_text, re.IGNORECASE
+            )
+            if rooms_match:
+                rooms = rooms_match.group(0).strip()
+
+            if city and not is_delft_area(city):
+                continue
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or "Delft",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("ikwilhuren.nu: failed to parse a listing: %s", exc)
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1019,6 +1238,10 @@ SITES = [
     ("Rent a Room Delft", RENTAROOM_URL, scrape_rentaroom),
     ("Frisia Makelaars", FRISIA_URL, scrape_frisia),
     ("Oude Delft", OUDEDELFT_URL, scrape_oudedelft),
+    ("PSG Wonen", PSGWONEN_URL, scrape_psgwonen),
+    ("Van Gulden Makelaardij", VANGULDEN_URL, scrape_vangulden),
+    ("ZO Makelaars", ZOMAKELAARS_URL, scrape_zomakelaars),
+    ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
 ]
 
 
