@@ -10,7 +10,7 @@ services:
       - scraper-data:/app/data
 
   scraper-sidecar:
-    build: ./python-sidecar
+    image: ghcr.io/francisbehnen/makelaar-web-scraper-sidecar:main
     container_name: scraper-sidecar
     restart: unless-stopped
     environment:
