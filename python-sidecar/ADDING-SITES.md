@@ -45,6 +45,6 @@ Dense reference for non-obvious gotchas. Read before writing a new parser.
 
 ## Deployment
 
-- The sidecar image is built locally on the VPS (not from GHCR). After code changes: SCP the updated files to `/docker/makelaar-scraper/python-sidecar/`, then `sudo docker compose up -d --build pararius-funda-sidecar`.
+- The sidecar image is built locally on the VPS (not from GHCR). After code changes: SCP the updated files to `/docker/makelaar-scraper/python-sidecar/`, then `sudo docker compose up -d --build scraper-sidecar`.
 - The Bun app image comes from GHCR via CI. The two have independent deployment paths.
 - Both containers share the `scraper-data` volume mounted at `/app/data`.

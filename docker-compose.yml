@@ -9,9 +9,9 @@ services:
     volumes:
       - scraper-data:/app/data
 
-  pararius-funda-sidecar:
+  scraper-sidecar:
     build: ./python-sidecar
-    container_name: pararius-funda-sidecar
+    container_name: scraper-sidecar
     restart: unless-stopped
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
