@@ -65,6 +65,7 @@ ZOMAKELAARS_URL = (
     "https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/"
 )
 IKWILHUREN_URL = "https://ikwilhuren.nu/aanbod/delft/"
+ZEVENTIGWONEN_URL = "https://www.070wonen.nl/huurwoningen/"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1253,6 +1254,83 @@ def scrape_ikwilhuren(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# 070 Wonen parser (WordPress)
+# ---------------------------------------------------------------------------
+
+def scrape_070wonen(page) -> list[dict[str, str]]:
+    dump_html(page, "070wonen")
+    houses: list[dict[str, str]] = []
+
+    listings = page.css("li.New, li.Onder\\ optie")
+    if not listings:
+        listings = [
+            li for li in page.css("li")
+            if li.css("h3") and li.css("a[href*='/huurwoningen/']")
+        ]
+    log.info("070 Wonen: %d listing elements found", len(listings))
+
+    for listing in listings:
+        try:
+            cls = (listing.attrib.get("class", "") or "").lower()
+            if "verhuurd" in cls:
+                continue
+
+            link_els = listing.css("a[href*='/huurwoningen/']")
+            if not link_els:
+                continue
+            href = link_els[0].attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://www.070wonen.nl")
+
+            heading = _first_text(listing, "h3")
+            address = heading
+            city = ""
+            pc_match = re.search(r"^(.*?)\s+(\d{4}\s*[A-Z]{2})\s+(.+)$", heading)
+            if pc_match:
+                address = pc_match.group(1).strip()
+                city = pc_match.group(3).strip()
+
+            if city and not is_delft_area(city):
+                continue
+
+            all_text = listing.get_all_text() or ""
+            price = ""
+            price_match = re.search(r"€\s*[\d.,]+", all_text)
+            if price_match:
+                price = price_match.group(0).strip()
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            area = ""
+            rooms = ""
+            detail_items = listing.css("ul li")
+            for item in detail_items:
+                txt = (item.text or item.get_all_text() or "").strip()
+                if re.search(r"\d+\s*m[²2]", txt):
+                    area = txt
+                elif re.search(r"slaapkamer", txt, re.IGNORECASE):
+                    rooms = txt
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or "Onbekend",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("070 Wonen: failed to parse a listing: %s", exc)
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1274,6 +1352,7 @@ SITES = [
     ("Van Gulden Makelaardij", VANGULDEN_URL, scrape_vangulden),
     ("ZO Makelaars", ZOMAKELAARS_URL, scrape_zomakelaars),
     ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
+    ("070 Wonen", ZEVENTIGWONEN_URL, scrape_070wonen),
 ]
 
 
