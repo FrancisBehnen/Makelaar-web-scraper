@@ -208,6 +208,24 @@ def send_telegram(houses):
                 log.error("Telegram send to %s failed: %s", chat_id, exc)
 
 
+def send_telegram_alert(message: str) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
+        return
+    chat_ids = [c.strip() for c in TELEGRAM_CHAT_IDS.split(",") if c.strip()]
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    for chat_id in chat_ids:
+        body = json.dumps(
+            {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
+        ).encode()
+        req = urllib.request.Request(
+            api_url, data=body, headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as exc:
+            log.error("Telegram alert to %s failed: %s", chat_id, exc)
+
+
 # ---------------------------------------------------------------------------
 # Debug helper — dump raw HTML for selector development
 # ---------------------------------------------------------------------------
@@ -1284,6 +1302,7 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
             page = _fetch_with_timeout(url)
         except TimeoutError:
             log.warning("%s page %d timed out after %ds, skipping", name, page_num, FETCH_TIMEOUT)
+            send_telegram_alert(f"⚠️ <b>{name}</b> page {page_num} timed out after {FETCH_TIMEOUT}s — skipped")
             break
         page_houses = parser(page)
         if not page_houses:
@@ -1328,6 +1347,9 @@ def run_cycle():
                 save_houses(conn, houses)
                 all_new.extend(houses)
                 existing_urls.update(h["url"] for h in houses)
+        except TimeoutError:
+            log.warning("%s timed out after %ds, skipping", name, FETCH_TIMEOUT)
+            send_telegram_alert(f"⚠️ <b>{name}</b> timed out after {FETCH_TIMEOUT}s — skipped")
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
