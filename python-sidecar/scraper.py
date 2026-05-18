@@ -5,9 +5,13 @@ import re
 import sqlite3
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 from scrapling.fetchers import StealthyFetcher
+
+FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
+_fetch_pool = ThreadPoolExecutor(max_workers=1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1255,6 +1259,17 @@ SITES = [
 ]
 
 
+def _fetch_with_timeout(url: str) -> object:
+    future = _fetch_pool.submit(
+        StealthyFetcher.fetch,
+        url,
+        headless=True,
+        solve_cloudflare=True,
+        network_idle=True,
+    )
+    return future.result(timeout=FETCH_TIMEOUT)
+
+
 def _scrape_paginated(name, url_template, parser, existing_urls):
     """Scrape all pages of a paginated site until the page is empty."""
     seen_urls: set[str] = set()
@@ -1265,9 +1280,11 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
     for page_num in range(1, max_pages + 1):
         url = url_template.format(page=page_num)
         log.info("Fetching %s page %d ...", name, page_num)
-        page = StealthyFetcher.fetch(
-            url, headless=True, solve_cloudflare=True, network_idle=True,
-        )
+        try:
+            page = _fetch_with_timeout(url)
+        except TimeoutError:
+            log.warning("%s page %d timed out after %ds, skipping", name, page_num, FETCH_TIMEOUT)
+            break
         page_houses = parser(page)
         if not page_houses:
             break
@@ -1302,12 +1319,7 @@ def run_cycle():
                 log.info("%s: %d new across all pages", name, len(houses))
             else:
                 log.info("Fetching %s ...", name)
-                page = StealthyFetcher.fetch(
-                    url,
-                    headless=True,
-                    solve_cloudflare=True,
-                    network_idle=True,
-                )
+                page = _fetch_with_timeout(url)
                 all_houses = parser(page)
                 houses = [h for h in all_houses if h["url"] not in existing_urls]
                 log.info("%s: %d scraped, %d new", name, len(all_houses), len(houses))
