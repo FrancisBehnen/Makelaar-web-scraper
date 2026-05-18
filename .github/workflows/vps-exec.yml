@@ -1,0 +1,161 @@
+name: VPS command dispatcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Operation to run
+        required: true
+        type: choice
+        options:
+          - docker-ps
+          - docker-logs-sidecar
+          - docker-logs-main
+          - docker-logs-errors
+          - docker-stats
+          - docker-restart-sidecar
+          - docker-restart-main
+          - docker-restart-both
+          - docker-compose-config
+          - scraper-cycle-status
+          - scraper-db-stats
+          - scraper-last-new
+          - watchtower-logs
+          - system-disk
+          - system-memory
+          - system-uptime
+          - system-processes
+      lines:
+        description: "Number of log lines (for log operations)"
+        required: false
+        default: "50"
+
+jobs:
+  exec:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run operation
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          envs: OP,LINES
+          script: |
+            case "${OP}" in
+
+              docker-ps)
+                sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
+                ;;
+
+              docker-logs-sidecar)
+                sudo docker logs --tail "${LINES:-50}" scraper-sidecar 2>&1
+                ;;
+
+              docker-logs-main)
+                sudo docker logs --tail "${LINES:-50}" makelaar-scraper 2>&1
+                ;;
+
+              docker-logs-errors)
+                echo "=== Sidecar Errors ==="
+                sudo docker logs --tail "${LINES:-200}" scraper-sidecar 2>&1 | grep -iE "error|fatal|crash|panic|timed out|timeout|traceback|warning" || echo "No errors found"
+                echo ""
+                echo "=== Main Scraper Errors ==="
+                sudo docker logs --tail "${LINES:-200}" makelaar-scraper 2>&1 | grep -iE "error|fatal|crash|panic" || echo "No errors found"
+                ;;
+
+              docker-stats)
+                sudo docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" makelaar-scraper scraper-sidecar
+                ;;
+
+              docker-restart-sidecar)
+                sudo docker restart scraper-sidecar
+                sleep 20
+                sudo docker ps -a --filter "name=scraper-sidecar" --format "table {{.Names}}\t{{.Status}}"
+                echo ""
+                sudo docker logs --tail 5 scraper-sidecar 2>&1
+                ;;
+
+              docker-restart-main)
+                sudo docker restart makelaar-scraper
+                sleep 20
+                sudo docker ps -a --filter "name=makelaar-scraper" --format "table {{.Names}}\t{{.Status}}"
+                echo ""
+                sudo docker logs --tail 5 makelaar-scraper 2>&1
+                ;;
+
+              docker-restart-both)
+                sudo docker restart scraper-sidecar makelaar-scraper
+                sleep 20
+                sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --format "table {{.Names}}\t{{.Status}}"
+                ;;
+
+              docker-compose-config)
+                cat /docker/makelaar/docker-compose.yml 2>/dev/null || cat /docker/makelaar-scraper/docker-compose.yml 2>/dev/null || echo "Compose file not found — checking common paths..."
+                find /docker -name "docker-compose.yml" -path "*makelaar*" 2>/dev/null
+                ;;
+
+              scraper-cycle-status)
+                echo "=== Sidecar Last Cycle ==="
+                sudo docker logs --tail 500 scraper-sidecar 2>&1 | grep -E "Cycle done|Starting scraper|timed out|scrape failed" | tail -10
+                echo ""
+                echo "=== Main Scraper Last Cycle ==="
+                sudo docker logs --tail 200 makelaar-scraper 2>&1 | grep -E "^Done$|^Connected|Found [0-9]" | tail -10
+                ;;
+
+              scraper-db-stats)
+                DB=$(sudo docker inspect scraper-sidecar --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
+                if [ -n "$DB" ] && [ -f "$DB/db.sqlite" ]; then
+                  echo "=== Database Stats ==="
+                  sudo sqlite3 "$DB/db.sqlite" "SELECT COUNT(*) || ' total listings' FROM houses;"
+                  sudo sqlite3 "$DB/db.sqlite" "SELECT COUNT(*) || ' listings added today' FROM houses WHERE created_at >= date('now');"
+                  sudo sqlite3 "$DB/db.sqlite" "SELECT COUNT(*) || ' listings added this week' FROM houses WHERE created_at >= date('now', '-7 days');"
+                  echo ""
+                  echo "=== Last 10 Listings ==="
+                  sudo sqlite3 -header -column "$DB/db.sqlite" "SELECT straatnaamHuisnummer, plaats, vraagprijs, created_at FROM houses ORDER BY created_at DESC LIMIT 10;"
+                else
+                  echo "Database not found at expected mount path"
+                  sudo docker inspect scraper-sidecar --format '{{json .Mounts}}' | python3 -m json.tool
+                fi
+                ;;
+
+              scraper-last-new)
+                echo "=== Last New Listings Found ==="
+                sudo docker logs --tail 2000 scraper-sidecar 2>&1 | grep -E "scraped, [1-9]+ new|[1-9]+ new across" | tail -20
+                echo ""
+                echo "=== Telegram Notifications Sent ==="
+                sudo docker logs --tail 2000 scraper-sidecar 2>&1 | grep -iE "telegram|notification" | tail -10
+                ;;
+
+              watchtower-logs)
+                sudo docker logs --tail "${LINES:-20}" watchtower 2>&1
+                ;;
+
+              system-disk)
+                df -h /
+                echo ""
+                echo "=== Docker disk usage ==="
+                sudo docker system df
+                ;;
+
+              system-memory)
+                free -h
+                ;;
+
+              system-uptime)
+                uptime
+                ;;
+
+              system-processes)
+                echo "=== Top 15 by memory ==="
+                ps aux --sort=-%mem | head -16
+                ;;
+
+              *)
+                echo "Unknown operation: ${OP}"
+                exit 1
+                ;;
+            esac
+        env:
+          OP: ${{ inputs.operation }}
+          LINES: ${{ inputs.lines }}

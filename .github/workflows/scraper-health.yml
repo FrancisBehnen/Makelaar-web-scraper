@@ -1,0 +1,34 @@
+name: Scraper health check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check scraper health
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          script: |
+            echo "=== Container Status ==="
+            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+            echo ""
+            echo "=== Sidecar Errors (last 200 lines) ==="
+            sudo docker logs --tail 200 scraper-sidecar 2>&1 | grep -iE "error|fatal|crash|panic|timed out|traceback" || echo "No errors found"
+
+            echo ""
+            echo "=== Main Scraper Errors (last 200 lines) ==="
+            sudo docker logs --tail 200 makelaar-scraper 2>&1 | grep -iE "error|fatal|crash|panic" || echo "No errors found"
+
+            echo ""
+            echo "=== Disk Usage ==="
+            df -h /
+
+            echo ""
+            echo "=== Memory ==="
+            free -h

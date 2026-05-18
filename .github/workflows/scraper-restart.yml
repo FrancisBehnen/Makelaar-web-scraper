@@ -1,0 +1,59 @@
+name: Restart scraper container
+
+on:
+  workflow_dispatch:
+    inputs:
+      container:
+        description: Which container to restart
+        required: true
+        type: choice
+        options:
+          - scraper-sidecar
+          - makelaar-scraper
+          - both
+        default: scraper-sidecar
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restart container
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          envs: TARGET
+          script: |
+            case "${TARGET}" in
+              both)
+                sudo docker restart scraper-sidecar makelaar-scraper
+                ;;
+              *)
+                sudo docker restart "${TARGET}"
+                ;;
+            esac
+
+            echo "Waiting 20s for containers to stabilize..."
+            sleep 20
+
+            echo ""
+            echo "=== Container Status ==="
+            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --format "table {{.Names}}\t{{.Status}}"
+
+            echo ""
+            echo "=== Last 10 log lines ==="
+            case "${TARGET}" in
+              both)
+                echo "--- scraper-sidecar ---"
+                sudo docker logs --tail 10 scraper-sidecar 2>&1
+                echo ""
+                echo "--- makelaar-scraper ---"
+                sudo docker logs --tail 10 makelaar-scraper 2>&1
+                ;;
+              *)
+                sudo docker logs --tail 10 "${TARGET}" 2>&1
+                ;;
+            esac
+        env:
+          TARGET: ${{ inputs.container }}
