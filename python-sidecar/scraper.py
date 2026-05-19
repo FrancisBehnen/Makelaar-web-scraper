@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -11,7 +12,11 @@ from pathlib import Path
 from scrapling.fetchers import StealthyFetcher
 
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
+MAX_CONSECUTIVE_FETCH_FAILURES = int(
+    os.environ.get("MAX_CONSECUTIVE_FETCH_FAILURES", "3")
+)
 _fetch_pool = ThreadPoolExecutor(max_workers=1)
+_consecutive_fetch_failures = 0
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1357,6 +1362,7 @@ SITES = [
 
 
 def _fetch_with_timeout(url: str) -> object:
+    global _consecutive_fetch_failures
     future = _fetch_pool.submit(
         StealthyFetcher.fetch,
         url,
@@ -1364,7 +1370,37 @@ def _fetch_with_timeout(url: str) -> object:
         solve_cloudflare=True,
         network_idle=True,
     )
-    return future.result(timeout=FETCH_TIMEOUT)
+    try:
+        page = future.result(timeout=FETCH_TIMEOUT)
+    except TimeoutError:
+        _record_fetch_failure("timeout")
+        raise
+    except Exception as exc:
+        # Playwright/Camoufox sometimes wedges the browser; once that happens
+        # every subsequent fetch hangs. Count these alongside timeouts so the
+        # self-heal threshold can trip from either symptom.
+        if "Page crashed" in str(exc):
+            _record_fetch_failure("page crashed")
+        raise
+    _consecutive_fetch_failures = 0
+    return page
+
+
+def _record_fetch_failure(reason: str) -> None:
+    global _consecutive_fetch_failures
+    _consecutive_fetch_failures += 1
+    if _consecutive_fetch_failures >= MAX_CONSECUTIVE_FETCH_FAILURES:
+        msg = (
+            f"{_consecutive_fetch_failures} consecutive fetch failures "
+            f"(last: {reason}). Browser likely wedged — exiting so Docker "
+            f"restarts the container."
+        )
+        log.critical(msg)
+        try:
+            send_telegram_alert(f"♻️ <b>Sidecar self-restart</b> — {msg}")
+        except Exception:
+            log.exception("Failed to send self-restart Telegram alert")
+        sys.exit(1)
 
 
 def _scrape_paginated(name, url_template, parser, existing_urls):
