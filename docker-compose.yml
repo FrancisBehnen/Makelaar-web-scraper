@@ -16,6 +16,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS}
+      - TELEGRAM_ALERT_CHAT_IDS=${TELEGRAM_ALERT_CHAT_IDS:-}
       - DB_PATH=data/db.sqlite
       - CHECK_INTERVAL=300
       - DEBUG_DUMP=false

@@ -29,6 +29,9 @@ CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 DEBUG_DUMP = os.environ.get("DEBUG_DUMP", "").lower() in ("1", "true", "yes")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_IDS = os.environ.get("TELEGRAM_CHAT_IDS", "")
+# Operational alerts (timeouts, self-restarts) go here instead of the group
+# chat. Falls back to TELEGRAM_CHAT_IDS when unset.
+TELEGRAM_ALERT_CHAT_IDS = os.environ.get("TELEGRAM_ALERT_CHAT_IDS", "")
 
 # ---------------------------------------------------------------------------
 # Site URLs
@@ -215,9 +218,12 @@ def send_telegram(houses):
 
 
 def send_telegram_alert(message: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
+    if not TELEGRAM_BOT_TOKEN:
         return
-    chat_ids = [c.strip() for c in TELEGRAM_CHAT_IDS.split(",") if c.strip()]
+    raw = TELEGRAM_ALERT_CHAT_IDS or TELEGRAM_CHAT_IDS
+    chat_ids = [c.strip() for c in raw.split(",") if c.strip()]
+    if not chat_ids:
+        return
     api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for chat_id in chat_ids:
         body = json.dumps(
