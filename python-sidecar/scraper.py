@@ -64,7 +64,7 @@ RENTAROOM_URL = "https://rent-a-room-delft.nl/grid-default/"
 FRISIA_URL = (
     "https://frisiamakelaars.nl/wonen/aanbod/"
     "?buy_rent=rent&rent_price=-1500"
-    "&order_by=created_at-desc&page={page}"
+    "&order_by=created_at-desc"
 )
 OUDEDELFT_URL = "https://oudedelft.com/huur-2/"
 PSGWONEN_URL = "https://www.psg-wonen.nl/woningaanbod/huur"
@@ -1466,7 +1466,11 @@ def run_cycle():
                 log.info("%s: %d new across all pages", name, len(houses))
             else:
                 log.info("Fetching %s ...", name)
-                page = _fetch_with_timeout(url)
+                try:
+                    page = _fetch_with_timeout(url)
+                except TimeoutError:
+                    log.warning("%s timed out, retrying once ...", name)
+                    page = _fetch_with_timeout(url)
                 all_houses = parser(page)
                 houses = [h for h in all_houses if h["url"] not in existing_urls]
                 log.info("%s: %d scraped, %d new", name, len(all_houses), len(houses))
