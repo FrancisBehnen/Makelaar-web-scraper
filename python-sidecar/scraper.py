@@ -76,6 +76,7 @@ ZOMAKELAARS_URL = (
 )
 IKWILHUREN_URL = "https://ikwilhuren.nu/aanbod/delft/"
 ZEVENTIGWONEN_URL = "https://www.070wonen.nl/huurwoningen/"
+DEBRUYNENTAK_URL = "https://www.debruynentak.nl/aanbod/woningen/te-huur/delft/"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1351,6 +1352,97 @@ def scrape_070wonen(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# De Bruyn en Tak Makelaardij parser
+# ---------------------------------------------------------------------------
+
+def scrape_debruynentak(page) -> list[dict[str, str]]:
+    dump_html(page, "debruynentak")
+    houses: list[dict[str, str]] = []
+
+    # Detail pages are root-level .html files named after the address
+    # (e.g. /engelsestraat-95.html). Anchor on those and require a house
+    # number in the slug to skip non-property pages (over-ons.html etc.).
+    anchors = page.css('a[href$=".html"]')
+    seen_hrefs: set[str] = set()
+    listings = []
+    for anchor in anchors:
+        href = anchor.attrib.get("href", "")
+        slug = href.rsplit("/", 1)[-1].removesuffix(".html")
+        if not slug or not re.search(r"\d", slug):
+            continue
+        if href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
+        listings.append(anchor)
+    log.info("De Bruyn en Tak: %d listing elements found", len(listings))
+
+    for anchor in listings:
+        try:
+            href = anchor.attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://www.debruynentak.nl")
+
+            # Smallest ancestor that carries a price is the listing card.
+            container = anchor
+            for _ in range(5):
+                if "€" in (container.get_all_text() or ""):
+                    break
+                if container.parent:
+                    container = container.parent
+                else:
+                    break
+
+            all_text = container.get_all_text() or ""
+
+            if re.search(r"verhuurd", all_text, re.IGNORECASE):
+                continue
+
+            address = _first_text(
+                container, "h2", "h3", "h4", "h3.street-address", ".adres"
+            )
+            if not address:
+                slug = href.rsplit("/", 1)[-1].removesuffix(".html")
+                address = slug.replace("-", " ").strip().title()
+
+            price = ""
+            price_match = re.search(r"€\s*[\d.,]+", all_text)
+            if price_match:
+                price = price_match.group(0).strip()
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            area = ""
+            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
+            if area_match:
+                area = f"{area_match.group(1)} m²"
+
+            rooms = ""
+            rooms_match = re.search(
+                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
+            )
+            if rooms_match:
+                rooms = rooms_match.group(0).strip()
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": "Delft",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("De Bruyn en Tak: failed to parse a listing: %s", exc)
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1373,6 +1465,7 @@ SITES = [
     ("ZO Makelaars", ZOMAKELAARS_URL, scrape_zomakelaars),
     ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
     ("070 Wonen", ZEVENTIGWONEN_URL, scrape_070wonen),
+    ("De Bruyn en Tak", DEBRUYNENTAK_URL, scrape_debruynentak),
 ]
 
 
