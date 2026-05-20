@@ -24,6 +24,9 @@ logging.basicConfig(
 log = logging.getLogger("sidecar")
 
 DB_PATH = os.environ.get("DB_PATH", "data/db.sqlite")
+# Dropped on the data volume just before a self-restart exit; its presence on
+# the next boot means the previous process self-restarted.
+SELF_RESTART_MARKER = Path(DB_PATH).parent / ".self_restart"
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 DEBUG_DUMP = os.environ.get("DEBUG_DUMP", "").lower() in ("1", "true", "yes")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -1412,6 +1415,11 @@ def _record_fetch_failure(reason: str) -> None:
             send_telegram_alert(f"♻️ <b>Sidecar self-restart</b> — {msg}")
         except Exception:
             log.exception("Failed to send self-restart Telegram alert")
+        try:
+            SELF_RESTART_MARKER.parent.mkdir(parents=True, exist_ok=True)
+            SELF_RESTART_MARKER.write_text(reason)
+        except Exception:
+            log.exception("Failed to write self-restart marker")
         # Hard exit: the wedged fetch still occupies the _fetch_pool worker
         # thread. sys.exit() would hang forever in the concurrent.futures
         # atexit handler joining that thread, so the process never dies and
@@ -1503,6 +1511,18 @@ def main():
         CHECK_INTERVAL,
         DEBUG_DUMP,
     )
+
+    if SELF_RESTART_MARKER.exists():
+        try:
+            reason = SELF_RESTART_MARKER.read_text().strip() or "unknown"
+            send_telegram_alert(
+                f"✅ <b>Sidecar back online</b> — recovered after self-restart "
+                f"(trigger: {reason})"
+            )
+        except Exception:
+            log.exception("Failed to send self-restart recovery alert")
+        finally:
+            SELF_RESTART_MARKER.unlink(missing_ok=True)
 
     while True:
         try:
