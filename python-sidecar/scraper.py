@@ -1359,69 +1359,51 @@ def scrape_debruynentak(page) -> list[dict[str, str]]:
     dump_html(page, "debruynentak")
     houses: list[dict[str, str]] = []
 
-    # Detail pages are root-level .html files named after the address
-    # (e.g. /engelsestraat-95.html). Anchor on those and require a house
-    # number in the slug to skip non-property pages (over-ons.html etc.).
-    anchors = page.css('a[href$=".html"]')
-    seen_hrefs: set[str] = set()
-    listings = []
-    for anchor in anchors:
-        href = anchor.attrib.get("href", "")
-        slug = href.rsplit("/", 1)[-1].removesuffix(".html")
-        if not slug or not re.search(r"\d", slug):
-            continue
-        if href in seen_hrefs:
-            continue
-        seen_hrefs.add(href)
-        listings.append(anchor)
-    log.info("De Bruyn en Tak: %d listing elements found", len(listings))
+    # Listing cards: div.objectList > div.item. Each card holds a status
+    # label, an a.itemTitel with span.objectTitel (address) + span.itemSubtitel
+    # (city), a span.itemSpecs ("3 kamer appartement, 86 m²") and a
+    # div.itemPrice with span.price ("1.325,-").
+    items = page.css("div.objectList div.item")
+    log.info("De Bruyn en Tak: %d listing elements found", len(items))
 
-    for anchor in listings:
+    for item in items:
         try:
-            href = anchor.attrib.get("href", "")
+            # A "Verhuurd" / "Verhuurd onder voorbehoud" label means rented.
+            label = _first_text(item, "div.label")
+            if re.search(r"verhuurd", label, re.IGNORECASE):
+                continue
+
+            link_el = item.css("a.itemTitel")
+            if not link_el:
+                continue
+            href = link_el[0].attrib.get("href", "")
             if not href:
                 continue
             url = make_absolute(href, "https://www.debruynentak.nl")
 
-            # Smallest ancestor that carries a price is the listing card.
-            container = anchor
-            for _ in range(5):
-                if "€" in (container.get_all_text() or ""):
-                    break
-                if container.parent:
-                    container = container.parent
-                else:
-                    break
-
-            all_text = container.get_all_text() or ""
-
-            if re.search(r"verhuurd", all_text, re.IGNORECASE):
-                continue
-
-            address = _first_text(
-                container, "h2", "h3", "h4", "h3.street-address", ".adres"
-            )
+            address = _first_text(item, "span.objectTitel")
             if not address:
                 slug = href.rsplit("/", 1)[-1].removesuffix(".html")
                 address = slug.replace("-", " ").strip().title()
 
-            price = ""
-            price_match = re.search(r"€\s*[\d.,]+", all_text)
-            if price_match:
-                price = price_match.group(0).strip()
+            city = _first_text(item, "span.itemSubtitel") or "Delft"
 
+            price_txt = _first_text(item, "div.itemPrice .price")
+            price = f"€ {price_txt}" if price_txt else ""
             price_val = parse_price_euros(price)
             if price_val and price_val > MAX_PRICE:
                 continue
 
+            specs = _first_text(item, "span.itemSpecs")
+
             area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
+            area_match = re.search(r"(\d+)\s*m[²2]", specs)
             if area_match:
                 area = f"{area_match.group(1)} m²"
 
             rooms = ""
             rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
+                r"(\d+)\s*(?:slaap)?kamer", specs, re.IGNORECASE
             )
             if rooms_match:
                 rooms = rooms_match.group(0).strip()
@@ -1430,7 +1412,7 @@ def scrape_debruynentak(page) -> list[dict[str, str]]:
                 {
                     "url": url,
                     "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": "Delft",
+                    "plaats": city,
                     "vraagprijs": price,
                     "oppervlakte": area,
                     "kamers": rooms,
