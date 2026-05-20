@@ -1,6 +1,7 @@
 import { IMakelaarResponseProcessor } from "./IMakelaarResponseProcessor";
 import { JSDOM } from "jsdom";
 import { Huis, IHuis } from "../Huis";
+import { isDelftAreaCity } from "../cityFilter";
 
 export class VanSilfhoutEnHogetoornDomProcessor
   implements IMakelaarResponseProcessor
@@ -26,6 +27,9 @@ export class VanSilfhoutEnHogetoornDomProcessor
       const straatnaamHuisnummer =
         adresBlock?.querySelector(".objecttitle")?.textContent;
       const plaats = adresBlock?.children.item(1)?.textContent;
+      if (plaats && !isDelftAreaCity(plaats)) {
+        return;
+      }
       const vraagprijs = item
         .querySelector(".shortSpecs")
         ?.children.item(0)
