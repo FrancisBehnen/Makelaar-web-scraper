@@ -76,6 +76,7 @@ ZOMAKELAARS_URL = (
 )
 IKWILHUREN_URL = "https://ikwilhuren.nu/aanbod/delft/"
 ZEVENTIGWONEN_URL = "https://www.070wonen.nl/huurwoningen/"
+DEBRUYNENTAK_URL = "https://www.debruynentak.nl/aanbod/woningen/te-huur/delft/"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1199,6 +1200,16 @@ def scrape_zomakelaars(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# De Bruyn en Tak parser (NVM makelaar on the Move.nl / Realworks platform)
+# ---------------------------------------------------------------------------
+
+def scrape_debruynentak(page) -> list[dict[str, str]]:
+    return _scrape_realworks(
+        page, "https://www.debruynentak.nl", "De Bruyn en Tak"
+    )
+
+
+# ---------------------------------------------------------------------------
 # ikwilhuren.nu parser (MVGM platform)
 # ---------------------------------------------------------------------------
 
@@ -1373,6 +1384,7 @@ SITES = [
     ("ZO Makelaars", ZOMAKELAARS_URL, scrape_zomakelaars),
     ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
     ("070 Wonen", ZEVENTIGWONEN_URL, scrape_070wonen),
+    ("De Bruyn en Tak", DEBRUYNENTAK_URL, scrape_debruynentak),
 ]
 
 
