@@ -1,5 +1,6 @@
 import { IMakelaarResponseProcessor } from "./IMakelaarResponseProcessor";
 import { Huis, IHuis } from "../Huis";
+import { isDelftAreaCity } from "../cityFilter";
 
 type RealtimeListingsJsonHouseResponse = {
   address: string;
@@ -56,23 +57,11 @@ function isRealtimeListingsJsonHouseResponse(
 export class RealtimeListingsJsonResponseProcessor
   implements IMakelaarResponseProcessor
 {
-  private static readonly DELFT_AREA_CITIES = [
-    "Delft",
-    "Delfgauw",
-    "Den Hoorn",
-    "Rijswijk",
-    "Schipluiden",
-    "Nootdorp",
-    "Pijnacker",
-  ];
-
   private isWithinOurCriteria(
     response: RealtimeListingsJsonHouseResponse,
   ): boolean {
     return (
-      RealtimeListingsJsonResponseProcessor.DELFT_AREA_CITIES.includes(
-        response.city,
-      ) &&
+      isDelftAreaCity(response.city) &&
       response.isRentals &&
       response.rentalsPrice <= 1500 &&
       response.bedrooms >= 1 &&

@@ -94,8 +94,17 @@ def parse_price_euros(text: str) -> int | None:
     return int(cleaned) if cleaned else None
 
 
-def is_delft_area(city: str) -> bool:
-    return city.strip().lower() in DELFT_AREA_CITIES
+def is_delft_area(text: str) -> bool:
+    """True when *text* mentions one of the target cities.
+
+    Accepts a bare city name or a longer string (e.g. a Pararius sub-title
+    like "2611 AB Delft (Binnenstad)") so every parser can share one filter.
+    """
+    lowered = (text or "").lower()
+    return any(
+        re.search(rf"\b{re.escape(city)}\b", lowered)
+        for city in DELFT_AREA_CITIES
+    )
 
 
 def make_absolute(href: str, base: str) -> str:
@@ -283,6 +292,9 @@ def scrape_pararius(page) -> list[dict[str, str]]:
             subtitle = listing.css(".listing-search-item__sub-title")
             city = (subtitle[0].text or "").strip() if subtitle else "Delft"
 
+            if city and not is_delft_area(city):
+                continue
+
             price_el = listing.css(".listing-search-item__price-main")
             price = (price_el[0].text or "").strip() if price_el else ""
 
@@ -335,6 +347,9 @@ def scrape_funda(page) -> list[dict[str, str]]:
 
             city_el = addr_link.css(".text-neutral-80")
             city = (city_el[0].text or "").strip() if city_el else "Delft"
+
+            if city and not is_delft_area(city):
+                continue
 
             card = addr_link
             for _ in range(4):
@@ -485,6 +500,9 @@ def scrape_marloes(page) -> list[dict[str, str]]:
                 elif "slaapkamer" in label or "kamer" in label:
                     rooms = val
 
+            if city and not is_delft_area(city):
+                continue
+
             houses.append(
                 {
                     "url": url,
@@ -527,6 +545,9 @@ def _scrape_realworks(page, base_url: str, site_name: str) -> list[dict[str, str
 
             address = _first_text(listing, "h3.street-address")
             city = _first_text(listing, "span.locality")
+
+            if city and not is_delft_area(city):
+                continue
 
             price_el = listing.css("span.kenmerkValue")
             price = (price_el[0].text or "").strip() if price_el else ""
@@ -598,6 +619,9 @@ def scrape_123wonen(page) -> list[dict[str, str]]:
                 title_text = (title_el[0].text or "").strip()
                 if "," in title_text:
                     city = title_text.split(",")[0].strip()
+
+            if city and not is_delft_area(city):
+                continue
 
             price = _first_text(listing, "div.pand-price")
 
@@ -728,6 +752,9 @@ def scrape_prinsenstad(page) -> list[dict[str, str]]:
                 listing, ".street_name", ".address", "h2", "h3"
             )
             city = _first_text(listing, ".city", ".locality")
+
+            if city and not is_delft_area(city):
+                continue
 
             price = ""
             price_match = re.search(r"€\s*[\d.,]+", all_text)
@@ -882,8 +909,13 @@ def scrape_rentaroom(page) -> list[dict[str, str]]:
 
             title_text = (title_link[0].text or "").strip()
             address = title_text
+            city = ""
             if "," in title_text:
                 address = title_text.rsplit(",", 1)[0].strip()
+                city = title_text.rsplit(",", 1)[1].strip()
+
+            if city and not is_delft_area(city):
+                continue
 
             price = _first_text(listing, "li.item-price")
 
@@ -896,7 +928,7 @@ def scrape_rentaroom(page) -> list[dict[str, str]]:
                 {
                     "url": url,
                     "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": "Delft",
+                    "plaats": city or "Delft",
                     "vraagprijs": price,
                     "oppervlakte": area,
                     "kamers": rooms,
@@ -947,6 +979,9 @@ def scrape_frisia(page) -> list[dict[str, str]]:
                 city_text = (city_els[0].text or "").strip()
                 if "," in city_text:
                     city = city_text.split(",")[-1].strip()
+
+            if city and not is_delft_area(city):
+                continue
 
             price_el = listing.css(".card--default__footer strong")
             price = (price_el[0].text or "").strip() if price_el else ""
@@ -1387,6 +1422,9 @@ def scrape_debruynentak(page) -> list[dict[str, str]]:
                 address = slug.replace("-", " ").strip().title()
 
             city = _first_text(item, "span.itemSubtitel") or "Delft"
+
+            if city and not is_delft_area(city):
+                continue
 
             price_txt = _first_text(item, "div.itemPrice .price")
             price = f"€ {price_txt}" if price_txt else ""
