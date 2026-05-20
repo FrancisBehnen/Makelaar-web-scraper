@@ -20,6 +20,7 @@ on:
           - scraper-cycle-status
           - scraper-db-stats
           - scraper-last-new
+          - scraper-debug-debruynentak
           - watchtower-logs
           - system-disk
           - system-memory
@@ -125,6 +126,26 @@ jobs:
                 echo ""
                 echo "=== Telegram Notifications Sent ==="
                 sudo docker logs --tail 2000 scraper-sidecar 2>&1 | grep -iE "telegram|notification" | tail -10
+                ;;
+
+              scraper-debug-debruynentak)
+                echo "=== Fetching De Bruyn en Tak with StealthyFetcher ==="
+                sudo docker exec scraper-sidecar python -c '
+import traceback
+from pathlib import Path
+from scrapling.fetchers import StealthyFetcher
+url = "https://www.debruynentak.nl/aanbod/woningen/te-huur/delft/"
+try:
+    page = StealthyFetcher.fetch(url, headless=True, solve_cloudflare=True, network_idle=True)
+    Path("data/debug").mkdir(parents=True, exist_ok=True)
+    Path("data/debug/debruynentak.html").write_bytes(page.body)
+    print("DUMP_OK", len(page.body), "bytes")
+except Exception:
+    traceback.print_exc()
+'
+                echo "===== BEGIN debruynentak.html ====="
+                sudo docker exec scraper-sidecar cat data/debug/debruynentak.html 2>/dev/null || echo "(no dump file)"
+                echo "===== END debruynentak.html ====="
                 ;;
 
               watchtower-logs)
