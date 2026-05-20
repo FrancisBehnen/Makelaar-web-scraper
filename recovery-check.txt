@@ -1,0 +1,747 @@
+Warning: Permanently added 'srv1407177.hstgr.cloud' (ED25519) to the list of known hosts.
+=== Generated: Wed May 20 07:06:54 UTC 2026 UTC ===
+
+=== Container status ===
+NAMES              STATUS                CREATED        IMAGE
+scraper-sidecar    Up 15 hours           15 hours ago   ghcr.io/francisbehnen/makelaar-web-scraper-sidecar:main
+makelaar-scraper   Up 15 hours           15 hours ago   ghcr.io/francisbehnen/makelaar-web-scraper:main
+watchtower         Up 7 days (healthy)   7 days ago     containrrr/watchtower
+
+=== Sidecar inspect (restart/exit info) ===
+RestartCount=0 Status=running Running=true StartedAt=2026-05-19T16:28:58.385427593Z FinishedAt=0001-01-01T00:00:00Z LastExitCode=0 OOMKilled=false
+
+=== Sidecar logs (last 500 lines) ===
+2026-05-20 05:02:20,031 [INFO] Fetching Pararius ...
+[2026-05-20 05:02:22] INFO: The turnstile version discovered is "managed"
+2026-05-20 05:02:22,107 [INFO] The turnstile version discovered is "managed"
+[2026-05-20 05:02:34] INFO: Cloudflare page didn't disappear after 10s, continuing...
+2026-05-20 05:02:34,505 [INFO] Cloudflare page didn't disappear after 10s, continuing...
+[2026-05-20 05:02:34] INFO: Looks like Cloudflare captcha is still present, solving again
+2026-05-20 05:02:34,509 [INFO] Looks like Cloudflare captcha is still present, solving again
+[2026-05-20 05:02:34] INFO: The turnstile version discovered is "managed"
+2026-05-20 05:02:34,512 [INFO] The turnstile version discovered is "managed"
+[2026-05-20 05:02:37] INFO: Cloudflare captcha is solved
+2026-05-20 05:02:37,441 [INFO] Cloudflare captcha is solved
+[2026-05-20 05:02:38] INFO: Fetched (307) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:02:38,173 [INFO] Fetched (307) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+[2026-05-20 05:02:38] INFO: Fetched (200) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:02:38,298 [INFO] Fetched (200) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:02:38,473 [INFO] Pararius: 32 listing elements found
+2026-05-20 05:02:38,480 [INFO] Pararius: 32 scraped, 0 new
+2026-05-20 05:02:38,480 [INFO] Fetching Funda ...
+[2026-05-20 05:02:41] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:41,487 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:41] INFO: Fetched (200) <GET https://www.funda.nl/zoeken/huur?selected_area=[%22delft%22]&price=%220-1500%22> (referer: https://www.google.com/)
+2026-05-20 05:02:41,538 [INFO] Fetched (200) <GET https://www.funda.nl/zoeken/huur?selected_area=[%22delft%22]&price=%220-1500%22> (referer: https://www.google.com/)
+2026-05-20 05:02:41,721 [INFO] Funda: 10 listing elements found
+2026-05-20 05:02:41,722 [INFO] Funda: 10 scraped, 0 new
+2026-05-20 05:02:41,723 [INFO] Fetching VBT Verhuurmakelaars ...
+[2026-05-20 05:02:44] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:44,197 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:44] INFO: Fetched (200) <GET https://vbtverhuurmakelaars.nl/woningen> (referer: https://www.google.com/)
+2026-05-20 05:02:44,236 [INFO] Fetched (200) <GET https://vbtverhuurmakelaars.nl/woningen> (referer: https://www.google.com/)
+2026-05-20 05:02:44,403 [INFO] VBT: 12 listing elements found
+2026-05-20 05:02:44,408 [INFO] VBT Verhuurmakelaars: 0 scraped, 0 new
+2026-05-20 05:02:44,408 [INFO] Fetching Marloes Makelaars ...
+[2026-05-20 05:02:47] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:47,203 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:47] INFO: Fetched (200) <GET https://www.marloesmakelaars.nl/aanbod/huur/?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address=> (referer: https://www.google.com/)
+2026-05-20 05:02:47,218 [INFO] Fetched (200) <GET https://www.marloesmakelaars.nl/aanbod/huur/?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address=> (referer: https://www.google.com/)
+2026-05-20 05:02:47,365 [INFO] Marloes: 5 listing elements found
+2026-05-20 05:02:47,366 [INFO] Marloes Makelaars: 5 scraped, 0 new
+2026-05-20 05:02:47,366 [INFO] Fetching Hof van Delft ...
+[2026-05-20 05:02:49] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:49,961 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:49] INFO: Fetched (200) <GET https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/> (referer: https://www.google.com/)
+2026-05-20 05:02:49,994 [INFO] Fetched (200) <GET https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/> (referer: https://www.google.com/)
+2026-05-20 05:02:50,226 [INFO] Hof van Delft: 0 listing elements found
+2026-05-20 05:02:50,227 [INFO] Hof van Delft: 0 scraped, 0 new
+2026-05-20 05:02:50,227 [INFO] Fetching 123Wonen ...
+[2026-05-20 05:02:53] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:53,157 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:53] INFO: Fetched (200) <GET https://www.123wonen.nl/huurwoningen/in/delft> (referer: https://www.google.com/)
+2026-05-20 05:02:53,183 [INFO] Fetched (200) <GET https://www.123wonen.nl/huurwoningen/in/delft> (referer: https://www.google.com/)
+2026-05-20 05:02:53,319 [INFO] 123Wonen: 4 listing elements found
+2026-05-20 05:02:53,320 [INFO] 123Wonen: 0 scraped, 0 new
+2026-05-20 05:02:53,320 [INFO] Fetching Rotsvast ...
+[2026-05-20 05:03:01] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:01,377 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:01] INFO: Fetched (200) <GET https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500> (referer: https://www.google.com/)
+2026-05-20 05:03:01,527 [INFO] Fetched (200) <GET https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500> (referer: https://www.google.com/)
+2026-05-20 05:03:01,725 [INFO] Rotsvast: 4 listing elements found
+2026-05-20 05:03:01,726 [INFO] Rotsvast: 4 scraped, 0 new
+2026-05-20 05:03:01,726 [INFO] Fetching Prinsenstad Makelaardij ...
+[2026-05-20 05:03:03] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:03,909 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:03] INFO: Fetched (200) <GET https://prinsenstadmakelaardij.nl/woningaanbod/huur?availability=1&pricerange.maxprice=1500> (referer: https://www.google.com/)
+2026-05-20 05:03:03,931 [INFO] Fetched (200) <GET https://prinsenstadmakelaardij.nl/woningaanbod/huur?availability=1&pricerange.maxprice=1500> (referer: https://www.google.com/)
+2026-05-20 05:03:04,087 [INFO] Prinsenstad: 0 listing elements found
+2026-05-20 05:03:04,088 [INFO] Prinsenstad Makelaardij: 0 scraped, 0 new
+2026-05-20 05:03:04,088 [INFO] Fetching Pactum Vastgoed ...
+[2026-05-20 05:03:06] INFO: The turnstile version discovered is "embedded"
+2026-05-20 05:03:06,851 [INFO] The turnstile version discovered is "embedded"
+[2026-05-20 05:03:07] INFO: Cloudflare captcha is solved
+2026-05-20 05:03:07,102 [INFO] Cloudflare captcha is solved
+[2026-05-20 05:03:07] INFO: Fetched (200) <GET https://www.pactumvastgoed.nl/huurwoningen> (referer: https://www.google.com/)
+2026-05-20 05:03:07,147 [INFO] Fetched (200) <GET https://www.pactumvastgoed.nl/huurwoningen> (referer: https://www.google.com/)
+2026-05-20 05:03:07,355 [INFO] Pactum: 0 listing elements found
+2026-05-20 05:03:07,355 [INFO] Pactum Vastgoed: 0 scraped, 0 new
+2026-05-20 05:03:07,355 [INFO] Fetching VW Makelaars ...
+[2026-05-20 05:03:09] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:09,833 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:09] INFO: Fetched (200) <GET https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/> (referer: https://www.google.com/)
+2026-05-20 05:03:09,850 [INFO] Fetched (200) <GET https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/> (referer: https://www.google.com/)
+2026-05-20 05:03:10,040 [INFO] VW Makelaars: 0 listing elements found
+2026-05-20 05:03:10,040 [INFO] VW Makelaars: 0 scraped, 0 new
+2026-05-20 05:03:10,040 [INFO] Fetching Rent a Room Delft ...
+[2026-05-20 05:03:12] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:12,227 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:12] INFO: Fetched (200) <GET https://rent-a-room-delft.nl/grid-default/> (referer: https://www.google.com/)
+2026-05-20 05:03:12,255 [INFO] Fetched (200) <GET https://rent-a-room-delft.nl/grid-default/> (referer: https://www.google.com/)
+2026-05-20 05:03:12,392 [INFO] Rent a Room: 2 listing elements found
+2026-05-20 05:03:12,394 [INFO] Rent a Room Delft: 2 scraped, 0 new
+2026-05-20 05:03:12,394 [INFO] Fetching Frisia Makelaars ...
+[2026-05-20 05:03:17] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:17,325 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:17] INFO: Fetched (301) <GET https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+2026-05-20 05:03:17,332 [INFO] Fetched (301) <GET https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+[2026-05-20 05:03:17] INFO: Fetched (200) <GET https://frisiamakelaars.nl/wonen/aanbod?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+2026-05-20 05:03:17,364 [INFO] Fetched (200) <GET https://frisiamakelaars.nl/wonen/aanbod?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+2026-05-20 05:03:17,544 [INFO] Frisia: 4 listing elements found
+2026-05-20 05:03:17,545 [INFO] Frisia Makelaars: 3 scraped, 0 new
+2026-05-20 05:03:17,546 [INFO] Fetching Oude Delft ...
+[2026-05-20 05:03:19] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:19,177 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:19] INFO: Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:03:19,215 [INFO] Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:03:19,365 [INFO] Oude Delft: 0 listing elements found
+2026-05-20 05:03:19,365 [INFO] Oude Delft: 0 scraped, 0 new
+2026-05-20 05:03:19,365 [INFO] Fetching PSG Wonen ...
+[2026-05-20 05:03:22] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:22,372 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:22] INFO: Fetched (200) <GET https://www.psg-wonen.nl/woningaanbod/huur> (referer: https://www.google.com/)
+2026-05-20 05:03:22,449 [INFO] Fetched (200) <GET https://www.psg-wonen.nl/woningaanbod/huur> (referer: https://www.google.com/)
+2026-05-20 05:03:22,634 [INFO] PSG Wonen: 7 listing elements found
+2026-05-20 05:03:22,635 [INFO] PSG Wonen: 0 scraped, 0 new
+2026-05-20 05:03:22,636 [INFO] Fetching Van Gulden Makelaardij ...
+[2026-05-20 05:03:26] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:26,250 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:26] INFO: Fetched (200) <GET https://vanguldenmakelaardij.nl/huuraanbod/> (referer: https://www.google.com/)
+2026-05-20 05:03:26,280 [INFO] Fetched (200) <GET https://vanguldenmakelaardij.nl/huuraanbod/> (referer: https://www.google.com/)
+2026-05-20 05:03:26,466 [INFO] Van Gulden: 1 listing elements found
+2026-05-20 05:03:26,467 [INFO] Van Gulden Makelaardij: 0 scraped, 0 new
+2026-05-20 05:03:26,467 [INFO] Fetching ZO Makelaars ...
+[2026-05-20 05:03:29] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:29,948 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:29] INFO: Fetched (200) <GET https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/> (referer: https://www.google.com/)
+2026-05-20 05:03:29,981 [INFO] Fetched (200) <GET https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/> (referer: https://www.google.com/)
+2026-05-20 05:03:30,169 [INFO] ZO Makelaars: 0 listing elements found
+2026-05-20 05:03:30,169 [INFO] ZO Makelaars: 0 scraped, 0 new
+2026-05-20 05:03:30,169 [INFO] Fetching ikwilhuren.nu ...
+[2026-05-20 05:03:32] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:32,957 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:32] INFO: Fetched (200) <GET https://ikwilhuren.nu/aanbod/delft/> (referer: https://www.google.com/)
+2026-05-20 05:03:32,986 [INFO] Fetched (200) <GET https://ikwilhuren.nu/aanbod/delft/> (referer: https://www.google.com/)
+2026-05-20 05:03:33,125 [INFO] ikwilhuren.nu: 10 listing elements found
+2026-05-20 05:03:33,129 [INFO] ikwilhuren.nu: 2 scraped, 0 new
+2026-05-20 05:03:33,129 [INFO] Fetching 070 Wonen ...
+[2026-05-20 05:03:43] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:43,710 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:43] INFO: Fetched (301) <GET https://www.070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+2026-05-20 05:03:43,719 [INFO] Fetched (301) <GET https://www.070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+[2026-05-20 05:03:43] INFO: Fetched (200) <GET https://070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+2026-05-20 05:03:43,748 [INFO] Fetched (200) <GET https://070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+2026-05-20 05:03:43,934 [INFO] 070 Wonen: 10 listing elements found
+2026-05-20 05:03:43,936 [INFO] 070 Wonen: 2 scraped, 0 new
+2026-05-20 05:03:43,937 [INFO] Cycle done — 0 new listing(s)
+2026-05-20 05:08:43,938 [INFO] Fetching Pararius ...
+[2026-05-20 05:08:46] INFO: The turnstile version discovered is "managed"
+2026-05-20 05:08:46,311 [INFO] The turnstile version discovered is "managed"
+[2026-05-20 05:08:57] INFO: Cloudflare page didn't disappear after 10s, continuing...
+2026-05-20 05:08:57,419 [INFO] Cloudflare page didn't disappear after 10s, continuing...
+[2026-05-20 05:08:57] INFO: Looks like Cloudflare captcha is still present, solving again
+2026-05-20 05:08:57,425 [INFO] Looks like Cloudflare captcha is still present, solving again
+[2026-05-20 05:08:57] INFO: The turnstile version discovered is "managed"
+2026-05-20 05:08:57,429 [INFO] The turnstile version discovered is "managed"
+[2026-05-20 05:09:00] INFO: Cloudflare captcha is solved
+2026-05-20 05:09:00,328 [INFO] Cloudflare captcha is solved
+[2026-05-20 05:09:00] INFO: Fetched (307) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:09:00,916 [INFO] Fetched (307) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+[2026-05-20 05:09:01] INFO: Fetched (200) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:09:01,082 [INFO] Fetched (200) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:09:01,294 [INFO] Pararius: 32 listing elements found
+2026-05-20 05:09:01,308 [INFO] Pararius: 32 scraped, 0 new
+2026-05-20 05:09:01,308 [INFO] Fetching Funda ...
+[2026-05-20 05:09:05] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:05,776 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:05] INFO: Fetched (200) <GET https://www.funda.nl/zoeken/huur?selected_area=[%22delft%22]&price=%220-1500%22> (referer: https://www.google.com/)
+2026-05-20 05:09:05,848 [INFO] Fetched (200) <GET https://www.funda.nl/zoeken/huur?selected_area=[%22delft%22]&price=%220-1500%22> (referer: https://www.google.com/)
+2026-05-20 05:09:06,040 [INFO] Funda: 10 listing elements found
+2026-05-20 05:09:06,042 [INFO] Funda: 10 scraped, 0 new
+2026-05-20 05:09:06,042 [INFO] Fetching VBT Verhuurmakelaars ...
+[2026-05-20 05:09:08] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:08,501 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:08] INFO: Fetched (200) <GET https://vbtverhuurmakelaars.nl/woningen> (referer: https://www.google.com/)
+2026-05-20 05:09:08,539 [INFO] Fetched (200) <GET https://vbtverhuurmakelaars.nl/woningen> (referer: https://www.google.com/)
+2026-05-20 05:09:08,689 [INFO] VBT: 12 listing elements found
+2026-05-20 05:09:08,693 [INFO] VBT Verhuurmakelaars: 0 scraped, 0 new
+2026-05-20 05:09:08,693 [INFO] Fetching Marloes Makelaars ...
+[2026-05-20 05:09:11] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:11,489 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:11] INFO: Fetched (200) <GET https://www.marloesmakelaars.nl/aanbod/huur/?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address=> (referer: https://www.google.com/)
+2026-05-20 05:09:11,506 [INFO] Fetched (200) <GET https://www.marloesmakelaars.nl/aanbod/huur/?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address=> (referer: https://www.google.com/)
+2026-05-20 05:09:11,660 [INFO] Marloes: 5 listing elements found
+2026-05-20 05:09:11,661 [INFO] Marloes Makelaars: 5 scraped, 0 new
+2026-05-20 05:09:11,661 [INFO] Fetching Hof van Delft ...
+[2026-05-20 05:09:14] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:14,091 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:14] INFO: Fetched (200) <GET https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/> (referer: https://www.google.com/)
+2026-05-20 05:09:14,116 [INFO] Fetched (200) <GET https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/> (referer: https://www.google.com/)
+2026-05-20 05:09:14,284 [INFO] Hof van Delft: 0 listing elements found
+2026-05-20 05:09:14,284 [INFO] Hof van Delft: 0 scraped, 0 new
+2026-05-20 05:09:14,284 [INFO] Fetching 123Wonen ...
+[2026-05-20 05:09:16] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:16,576 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:16] INFO: Fetched (200) <GET https://www.123wonen.nl/huurwoningen/in/delft> (referer: https://www.google.com/)
+2026-05-20 05:09:16,598 [INFO] Fetched (200) <GET https://www.123wonen.nl/huurwoningen/in/delft> (referer: https://www.google.com/)
+2026-05-20 05:09:16,728 [INFO] 123Wonen: 4 listing elements found
+2026-05-20 05:09:16,729 [INFO] 123Wonen: 0 scraped, 0 new
+2026-05-20 05:09:16,729 [INFO] Fetching Rotsvast ...
+[2026-05-20 05:09:25] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:25,295 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:25] INFO: Fetched (200) <GET https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500> (referer: https://www.google.com/)
+2026-05-20 05:09:25,422 [INFO] Fetched (200) <GET https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500> (referer: https://www.google.com/)
+2026-05-20 05:09:25,625 [INFO] Rotsvast: 4 listing elements found
+2026-05-20 05:09:25,625 [INFO] Rotsvast: 4 scraped, 0 new
+2026-05-20 05:09:25,625 [INFO] Fetching Prinsenstad Makelaardij ...
+[2026-05-20 05:09:27] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:27,821 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:27] INFO: Fetched (200) <GET https://prinsenstadmakelaardij.nl/woningaanbod/huur?availability=1&pricerange.maxprice=1500> (referer: https://www.google.com/)
+2026-05-20 05:09:27,842 [INFO] Fetched (200) <GET https://prinsenstadmakelaardij.nl/woningaanbod/huur?availability=1&pricerange.maxprice=1500> (referer: https://www.google.com/)
+2026-05-20 05:09:27,968 [INFO] Prinsenstad: 0 listing elements found
+2026-05-20 05:09:27,968 [INFO] Prinsenstad Makelaardij: 0 scraped, 0 new
+2026-05-20 05:09:27,968 [INFO] Fetching Pactum Vastgoed ...
+[2026-05-20 05:09:30] INFO: The turnstile version discovered is "embedded"
+2026-05-20 05:09:30,438 [INFO] The turnstile version discovered is "embedded"
+[2026-05-20 05:09:30] INFO: Cloudflare captcha is solved
+2026-05-20 05:09:30,620 [INFO] Cloudflare captcha is solved
+[2026-05-20 05:09:30] INFO: Fetched (200) <GET https://www.pactumvastgoed.nl/huurwoningen> (referer: https://www.google.com/)
+2026-05-20 05:09:30,645 [INFO] Fetched (200) <GET https://www.pactumvastgoed.nl/huurwoningen> (referer: https://www.google.com/)
+2026-05-20 05:09:30,825 [INFO] Pactum: 0 listing elements found
+2026-05-20 05:09:30,825 [INFO] Pactum Vastgoed: 0 scraped, 0 new
+2026-05-20 05:09:30,825 [INFO] Fetching VW Makelaars ...
+[2026-05-20 05:09:33] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:33,217 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:33] INFO: Fetched (200) <GET https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/> (referer: https://www.google.com/)
+2026-05-20 05:09:33,233 [INFO] Fetched (200) <GET https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/> (referer: https://www.google.com/)
+2026-05-20 05:09:33,414 [INFO] VW Makelaars: 0 listing elements found
+2026-05-20 05:09:33,414 [INFO] VW Makelaars: 0 scraped, 0 new
+2026-05-20 05:09:33,414 [INFO] Fetching Rent a Room Delft ...
+[2026-05-20 05:09:35] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:35,464 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:35] INFO: Fetched (200) <GET https://rent-a-room-delft.nl/grid-default/> (referer: https://www.google.com/)
+2026-05-20 05:09:35,492 [INFO] Fetched (200) <GET https://rent-a-room-delft.nl/grid-default/> (referer: https://www.google.com/)
+2026-05-20 05:09:35,643 [INFO] Rent a Room: 2 listing elements found
+2026-05-20 05:09:35,643 [INFO] Rent a Room Delft: 2 scraped, 0 new
+2026-05-20 05:09:35,643 [INFO] Fetching Frisia Makelaars ...
+[2026-05-20 05:09:40] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:40,035 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:40] INFO: Fetched (301) <GET https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+2026-05-20 05:09:40,044 [INFO] Fetched (301) <GET https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+[2026-05-20 05:09:40] INFO: Fetched (200) <GET https://frisiamakelaars.nl/wonen/aanbod?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+2026-05-20 05:09:40,077 [INFO] Fetched (200) <GET https://frisiamakelaars.nl/wonen/aanbod?buy_rent=rent&rent_price=-1500&order_by=created_at-desc> (referer: https://www.google.com/)
+2026-05-20 05:09:40,261 [INFO] Frisia: 4 listing elements found
+2026-05-20 05:09:40,262 [INFO] Frisia Makelaars: 3 scraped, 0 new
+2026-05-20 05:09:40,262 [INFO] Fetching Oude Delft ...
+[2026-05-20 05:09:41] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:41,818 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:41] INFO: Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:09:41,856 [INFO] Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:09:42,015 [INFO] Oude Delft: 0 listing elements found
+2026-05-20 05:09:42,015 [INFO] Oude Delft: 0 scraped, 0 new
+2026-05-20 05:09:42,016 [INFO] Fetching PSG Wonen ...
+[2026-05-20 05:09:44] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:44,896 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:44] INFO: Fetched (200) <GET https://www.psg-wonen.nl/woningaanbod/huur> (referer: https://www.google.com/)
+2026-05-20 05:09:44,971 [INFO] Fetched (200) <GET https://www.psg-wonen.nl/woningaanbod/huur> (referer: https://www.google.com/)
+2026-05-20 05:09:45,151 [INFO] PSG Wonen: 7 listing elements found
+2026-05-20 05:09:45,154 [INFO] PSG Wonen: 0 scraped, 0 new
+2026-05-20 05:09:45,154 [INFO] Fetching Van Gulden Makelaardij ...
+[2026-05-20 05:09:48] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:48,525 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:48] INFO: Fetched (200) <GET https://vanguldenmakelaardij.nl/huuraanbod/> (referer: https://www.google.com/)
+2026-05-20 05:09:48,553 [INFO] Fetched (200) <GET https://vanguldenmakelaardij.nl/huuraanbod/> (referer: https://www.google.com/)
+2026-05-20 05:09:48,724 [INFO] Van Gulden: 1 listing elements found
+2026-05-20 05:09:48,724 [INFO] Van Gulden Makelaardij: 0 scraped, 0 new
+2026-05-20 05:09:48,724 [INFO] Fetching ZO Makelaars ...
+[2026-05-20 05:09:52] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:52,096 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:52] INFO: Fetched (200) <GET https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/> (referer: https://www.google.com/)
+2026-05-20 05:09:52,129 [INFO] Fetched (200) <GET https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/> (referer: https://www.google.com/)
+2026-05-20 05:09:52,309 [INFO] ZO Makelaars: 0 listing elements found
+2026-05-20 05:09:52,309 [INFO] ZO Makelaars: 0 scraped, 0 new
+2026-05-20 05:09:52,309 [INFO] Fetching ikwilhuren.nu ...
+[2026-05-20 05:09:55] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:55,034 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:55] INFO: Fetched (200) <GET https://ikwilhuren.nu/aanbod/delft/> (referer: https://www.google.com/)
+2026-05-20 05:09:55,062 [INFO] Fetched (200) <GET https://ikwilhuren.nu/aanbod/delft/> (referer: https://www.google.com/)
+2026-05-20 05:09:55,234 [INFO] ikwilhuren.nu: 10 listing elements found
+2026-05-20 05:09:55,240 [INFO] ikwilhuren.nu: 2 scraped, 0 new
+2026-05-20 05:09:55,240 [INFO] Fetching 070 Wonen ...
+[2026-05-20 05:10:00] ERROR: No Cloudflare challenge found.
+2026-05-20 05:10:00,137 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:10:00] INFO: Fetched (301) <GET https://www.070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+2026-05-20 05:10:00,148 [INFO] Fetched (301) <GET https://www.070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+[2026-05-20 05:10:00] INFO: Fetched (200) <GET https://070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+2026-05-20 05:10:00,180 [INFO] Fetched (200) <GET https://070wonen.nl/huurwoningen/> (referer: https://www.google.com/)
+2026-05-20 05:10:00,378 [INFO] 070 Wonen: 10 listing elements found
+2026-05-20 05:10:00,380 [INFO] 070 Wonen: 2 scraped, 0 new
+2026-05-20 05:10:00,381 [INFO] Cycle done — 0 new listing(s)
+2026-05-20 05:15:00,383 [INFO] Fetching Pararius ...
+[2026-05-20 05:15:02] INFO: The turnstile version discovered is "managed"
+2026-05-20 05:15:02,633 [INFO] The turnstile version discovered is "managed"
+[2026-05-20 05:15:14] INFO: Cloudflare page didn't disappear after 10s, continuing...
+2026-05-20 05:15:14,252 [INFO] Cloudflare page didn't disappear after 10s, continuing...
+[2026-05-20 05:15:14] INFO: Looks like Cloudflare captcha is still present, solving again
+2026-05-20 05:15:14,257 [INFO] Looks like Cloudflare captcha is still present, solving again
+[2026-05-20 05:15:14] INFO: The turnstile version discovered is "managed"
+2026-05-20 05:15:14,261 [INFO] The turnstile version discovered is "managed"
+[2026-05-20 05:15:17] INFO: Cloudflare captcha is solved
+2026-05-20 05:15:17,845 [INFO] Cloudflare captcha is solved
+[2026-05-20 05:15:18] INFO: Fetched (307) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:15:18,540 [INFO] Fetched (307) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+[2026-05-20 05:15:18] INFO: Fetched (200) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:15:18,647 [INFO] Fetched (200) <GET https://www.pararius.nl/huurwoningen/delft/0-1500> (referer: https://www.google.com/)
+2026-05-20 05:15:18,831 [INFO] Pararius: 32 listing elements found
+2026-05-20 05:15:18,839 [INFO] Pararius: 32 scraped, 0 new
+2026-05-20 05:15:18,839 [INFO] Fetching Funda ...
+[2026-05-20 05:15:22] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:22,037 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:22] INFO: Fetched (200) <GET https://www.funda.nl/zoeken/huur?selected_area=[%22delft%22]&price=%220-1500%22> (referer: https://www.google.com/)
+2026-05-20 05:15:22,097 [INFO] Fetched (200) <GET https://www.funda.nl/zoeken/huur?selected_area=[%22delft%22]&price=%220-1500%22> (referer: https://www.google.com/)
+2026-05-20 05:15:22,253 [INFO] Funda: 10 listing elements found
+2026-05-20 05:15:22,255 [INFO] Funda: 10 scraped, 0 new
+2026-05-20 05:15:22,255 [INFO] Fetching VBT Verhuurmakelaars ...
+[2026-05-20 05:15:25] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:25,721 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:25] INFO: Fetched (200) <GET https://vbtverhuurmakelaars.nl/woningen> (referer: https://www.google.com/)
+2026-05-20 05:15:25,754 [INFO] Fetched (200) <GET https://vbtverhuurmakelaars.nl/woningen> (referer: https://www.google.com/)
+2026-05-20 05:15:25,914 [INFO] VBT: 12 listing elements found
+2026-05-20 05:15:25,918 [INFO] VBT Verhuurmakelaars: 0 scraped, 0 new
+2026-05-20 05:15:25,918 [INFO] Fetching Marloes Makelaars ...
+[2026-05-20 05:15:28] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:28,561 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:28] INFO: Fetched (200) <GET https://www.marloesmakelaars.nl/aanbod/huur/?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address=> (referer: https://www.google.com/)
+2026-05-20 05:15:28,583 [INFO] Fetched (200) <GET https://www.marloesmakelaars.nl/aanbod/huur/?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address=> (referer: https://www.google.com/)
+2026-05-20 05:15:28,741 [INFO] Marloes: 5 listing elements found
+2026-05-20 05:15:28,742 [INFO] Marloes Makelaars: 5 scraped, 0 new
+2026-05-20 05:15:28,742 [INFO] Fetching Hof van Delft ...
+[2026-05-20 05:15:31] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:31,206 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:31] INFO: Fetched (200) <GET https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/> (referer: https://www.google.com/)
+2026-05-20 05:15:31,228 [INFO] Fetched (200) <GET https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/> (referer: https://www.google.com/)
+2026-05-20 05:15:31,406 [INFO] Hof van Delft: 0 listing elements found
+2026-05-20 05:15:31,406 [INFO] Hof van Delft: 0 scraped, 0 new
+2026-05-20 05:15:31,406 [INFO] Fetching 123Wonen ...
+[2026-05-20 05:15:33] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:33,767 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:33] INFO: Fetched (200) <GET https://www.123wonen.nl/huurwoningen/in/delft> (referer: https://www.google.com/)
+2026-05-20 05:15:33,792 [INFO] Fetched (200) <GET https://www.123wonen.nl/huurwoningen/in/delft> (referer: https://www.google.com/)
+2026-05-20 05:15:33,934 [INFO] 123Wonen: 4 listing elements found
+2026-05-20 05:15:33,934 [INFO] 123Wonen: 0 scraped, 0 new
+2026-05-20 05:15:33,934 [INFO] Fetching Rotsvast ...
+[2026-05-20 05:15:39] WARNING: Attempt 1 failed: Page.goto: Page crashed
+Call log:
+  - navigating to "https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:15:39,040 [WARNING] Attempt 1 failed: Page.goto: Page crashed
+Call log:
+  - navigating to "https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500", waiting until "load"
+. Retrying in 1s...
+[2026-05-20 05:15:46] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:46,333 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:46] INFO: Fetched (200) <GET https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500> (referer: https://www.google.com/)
+2026-05-20 05:15:46,455 [INFO] Fetched (200) <GET https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500> (referer: https://www.google.com/)
+2026-05-20 05:15:46,670 [INFO] Rotsvast: 4 listing elements found
+2026-05-20 05:15:46,671 [INFO] Rotsvast: 4 scraped, 0 new
+2026-05-20 05:15:46,671 [INFO] Fetching Prinsenstad Makelaardij ...
+[2026-05-20 05:15:48] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:48,655 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:48] INFO: Fetched (200) <GET https://prinsenstadmakelaardij.nl/woningaanbod/huur?availability=1&pricerange.maxprice=1500> (referer: https://www.google.com/)
+2026-05-20 05:15:48,677 [INFO] Fetched (200) <GET https://prinsenstadmakelaardij.nl/woningaanbod/huur?availability=1&pricerange.maxprice=1500> (referer: https://www.google.com/)
+2026-05-20 05:15:48,809 [INFO] Prinsenstad: 0 listing elements found
+2026-05-20 05:15:48,809 [INFO] Prinsenstad Makelaardij: 0 scraped, 0 new
+2026-05-20 05:15:48,809 [INFO] Fetching Pactum Vastgoed ...
+[2026-05-20 05:15:50] INFO: The turnstile version discovered is "embedded"
+2026-05-20 05:15:50,996 [INFO] The turnstile version discovered is "embedded"
+[2026-05-20 05:15:51] INFO: Cloudflare captcha is solved
+2026-05-20 05:15:51,200 [INFO] Cloudflare captcha is solved
+[2026-05-20 05:15:51] INFO: Fetched (200) <GET https://www.pactumvastgoed.nl/huurwoningen> (referer: https://www.google.com/)
+2026-05-20 05:15:51,219 [INFO] Fetched (200) <GET https://www.pactumvastgoed.nl/huurwoningen> (referer: https://www.google.com/)
+2026-05-20 05:15:51,377 [INFO] Pactum: 0 listing elements found
+2026-05-20 05:15:51,377 [INFO] Pactum Vastgoed: 0 scraped, 0 new
+2026-05-20 05:15:51,377 [INFO] Fetching VW Makelaars ...
+[2026-05-20 05:15:53] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:53,785 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:53] INFO: Fetched (200) <GET https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/> (referer: https://www.google.com/)
+2026-05-20 05:15:53,805 [INFO] Fetched (200) <GET https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/> (referer: https://www.google.com/)
+2026-05-20 05:15:53,966 [INFO] VW Makelaars: 0 listing elements found
+2026-05-20 05:15:53,966 [INFO] VW Makelaars: 0 scraped, 0 new
+2026-05-20 05:15:53,966 [INFO] Fetching Rent a Room Delft ...
+[2026-05-20 05:16:54] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://rent-a-room-delft.nl/grid-default/", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:16:54,584 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://rent-a-room-delft.nl/grid-default/", waiting until "load"
+. Retrying in 1s...
+[2026-05-20 05:16:57] ERROR: No Cloudflare challenge found.
+2026-05-20 05:16:57,421 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:16:57] INFO: Fetched (200) <GET https://rent-a-room-delft.nl/grid-default/> (referer: https://www.google.com/)
+2026-05-20 05:16:57,450 [INFO] Fetched (200) <GET https://rent-a-room-delft.nl/grid-default/> (referer: https://www.google.com/)
+2026-05-20 05:16:57,590 [INFO] Rent a Room: 2 listing elements found
+2026-05-20 05:16:57,590 [INFO] Rent a Room Delft: 2 scraped, 0 new
+2026-05-20 05:16:57,590 [INFO] Fetching Frisia Makelaars ...
+[2026-05-20 05:17:58] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:17:58,253 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+. Retrying in 1s...
+[2026-05-20 05:18:00] WARNING: Attempt 2 failed: Page.goto: Page crashed
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:18:00,619 [WARNING] Attempt 2 failed: Page.goto: Page crashed
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+. Retrying in 1s...
+[2026-05-20 05:18:02] ERROR: Failed after 3 attempts: Page.goto: Page crashed
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+
+2026-05-20 05:18:02,500 [ERROR] Failed after 3 attempts: Page.goto: Page crashed
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+
+2026-05-20 05:18:02,660 [ERROR] Frisia Makelaars scrape failed: Page.goto: Page crashed
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+Traceback (most recent call last):
+  File "/app/scraper.py", line 1470, in run_cycle
+    page = _fetch_with_timeout(url)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/scraper.py", line 1387, in _fetch_with_timeout
+    page = future.result(timeout=FETCH_TIMEOUT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/usr/local/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/scrapling/fetchers/stealth_chrome.py", line 63, in fetch
+    return engine.fetch(url)
+           ^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/scrapling/engines/_browsers/_stealth.py", line 247, in fetch
+    first_response = page.goto(url, referer=referer)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/patchright/sync_api/_generated.py", line 9168, in goto
+    self._sync(
+  File "/usr/local/lib/python3.12/site-packages/patchright/_impl/_sync_base.py", line 94, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/patchright/_impl/_page.py", line 533, in goto
+    return await self._main_frame.goto(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/patchright/_impl/_frame.py", line 134, in goto
+    await self._channel.send(
+  File "/usr/local/lib/python3.12/site-packages/patchright/_impl/_connection.py", line 52, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/patchright/_impl/_connection.py", line 500, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+patchright._impl._errors.Error: Page.goto: Page crashed
+Call log:
+  - navigating to "https://frisiamakelaars.nl/wonen/aanbod/?buy_rent=rent&rent_price=-1500&order_by=created_at-desc", waiting until "load"
+
+2026-05-20 05:18:02,661 [INFO] Fetching Oude Delft ...
+[2026-05-20 05:19:03] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://oudedelft.com/huur-2/", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:19:03,412 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://oudedelft.com/huur-2/", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:20:02,662 [WARNING] Oude Delft timed out, retrying once ...
+[2026-05-20 05:20:05] WARNING: Attempt 2 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://oudedelft.com/huur-2/", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:20:05,010 [WARNING] Attempt 2 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://oudedelft.com/huur-2/", waiting until "load"
+. Retrying in 1s...
+[2026-05-20 05:20:07] ERROR: No Cloudflare challenge found.
+2026-05-20 05:20:07,455 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:20:07] INFO: Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:20:07,481 [INFO] Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+[2026-05-20 05:20:09] ERROR: No Cloudflare challenge found.
+2026-05-20 05:20:09,244 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:20:09] INFO: Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:20:09,280 [INFO] Fetched (200) <GET https://oudedelft.com/huur-2/> (referer: https://www.google.com/)
+2026-05-20 05:20:09,440 [INFO] Oude Delft: 0 listing elements found
+2026-05-20 05:20:09,440 [INFO] Oude Delft: 0 scraped, 0 new
+2026-05-20 05:20:09,440 [INFO] Fetching PSG Wonen ...
+[2026-05-20 05:21:10] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://www.psg-wonen.nl/woningaanbod/huur", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:21:10,144 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+Call log:
+  - navigating to "https://www.psg-wonen.nl/woningaanbod/huur", waiting until "load"
+. Retrying in 1s...
+2026-05-20 05:22:09,441 [WARNING] PSG Wonen timed out, retrying once ...
+2026-05-20 05:24:09,441 [WARNING] PSG Wonen timed out after 120s, skipping
+2026-05-20 05:24:09,573 [INFO] Fetching Van Gulden Makelaardij ...
+2026-05-20 05:26:09,573 [CRITICAL] 3 consecutive fetch failures (last: timeout). Browser likely wedged — exiting so Docker restarts the container.
+
+=== Sidecar errors/restarts in last 800 lines ===
+[2026-05-20 04:44:42] ERROR: No Cloudflare challenge found.
+2026-05-20 04:44:42,501 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:44:50] ERROR: No Cloudflare challenge found.
+2026-05-20 04:44:50,975 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:03] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:03,100 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:06] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:06,479 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:09] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:09,619 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:12] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:12,219 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:14] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:14,709 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:22] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:22,059 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:24] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:24,532 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:30] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:30,193 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:32] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:32,372 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:36] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:36,673 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:38] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:38,517 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:41] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:41,784 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:45] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:45,468 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:49] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:49,132 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:50:52] ERROR: No Cloudflare challenge found.
+2026-05-20 04:50:52,055 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:51:00] ERROR: No Cloudflare challenge found.
+2026-05-20 04:51:00,572 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:21] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:21,497 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:24] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:24,221 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:27] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:27,122 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:29] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:29,801 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:32] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:32,216 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:39] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:39,711 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:42] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:42,345 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:52] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:52,836 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:55] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:55,006 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:56:59] ERROR: No Cloudflare challenge found.
+2026-05-20 04:56:59,297 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:57:01] ERROR: No Cloudflare challenge found.
+2026-05-20 04:57:01,150 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:57:04] ERROR: No Cloudflare challenge found.
+2026-05-20 04:57:04,362 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:57:07] ERROR: No Cloudflare challenge found.
+2026-05-20 04:57:07,994 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:57:11] ERROR: No Cloudflare challenge found.
+2026-05-20 04:57:11,786 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:57:14] ERROR: No Cloudflare challenge found.
+2026-05-20 04:57:14,659 [ERROR] No Cloudflare challenge found.
+[2026-05-20 04:57:19] ERROR: No Cloudflare challenge found.
+2026-05-20 04:57:19,812 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:41] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:41,487 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:44] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:44,197 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:47] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:47,203 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:49] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:49,961 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:02:53] ERROR: No Cloudflare challenge found.
+2026-05-20 05:02:53,157 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:01] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:01,377 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:03] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:03,909 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:09] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:09,833 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:12] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:12,227 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:17] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:17,325 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:19] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:19,177 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:22] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:22,372 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:26] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:26,250 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:29] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:29,948 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:32] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:32,957 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:03:43] ERROR: No Cloudflare challenge found.
+2026-05-20 05:03:43,710 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:05] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:05,776 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:08] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:08,501 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:11] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:11,489 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:14] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:14,091 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:16] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:16,576 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:25] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:25,295 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:27] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:27,821 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:33] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:33,217 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:35] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:35,464 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:40] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:40,035 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:41] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:41,818 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:44] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:44,896 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:48] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:48,525 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:52] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:52,096 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:09:55] ERROR: No Cloudflare challenge found.
+2026-05-20 05:09:55,034 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:10:00] ERROR: No Cloudflare challenge found.
+2026-05-20 05:10:00,137 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:22] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:22,037 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:25] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:25,721 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:28] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:28,561 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:31] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:31,206 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:33] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:33,767 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:39] WARNING: Attempt 1 failed: Page.goto: Page crashed
+2026-05-20 05:15:39,040 [WARNING] Attempt 1 failed: Page.goto: Page crashed
+[2026-05-20 05:15:46] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:46,333 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:48] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:48,655 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:15:53] ERROR: No Cloudflare challenge found.
+2026-05-20 05:15:53,785 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:16:54] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:16:54,584 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+[2026-05-20 05:16:57] ERROR: No Cloudflare challenge found.
+2026-05-20 05:16:57,421 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:17:58] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:17:58,253 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+[2026-05-20 05:18:00] WARNING: Attempt 2 failed: Page.goto: Page crashed
+2026-05-20 05:18:00,619 [WARNING] Attempt 2 failed: Page.goto: Page crashed
+[2026-05-20 05:18:02] ERROR: Failed after 3 attempts: Page.goto: Page crashed
+2026-05-20 05:18:02,500 [ERROR] Failed after 3 attempts: Page.goto: Page crashed
+2026-05-20 05:18:02,660 [ERROR] Frisia Makelaars scrape failed: Page.goto: Page crashed
+Traceback (most recent call last):
+    page = _fetch_with_timeout(url)
+  File "/app/scraper.py", line 1387, in _fetch_with_timeout
+    page = future.result(timeout=FETCH_TIMEOUT)
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+patchright._impl._errors.Error: Page.goto: Page crashed
+[2026-05-20 05:19:03] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:19:03,412 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:20:02,662 [WARNING] Oude Delft timed out, retrying once ...
+[2026-05-20 05:20:05] WARNING: Attempt 2 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:20:05,010 [WARNING] Attempt 2 failed: Page.goto: Timeout 60000ms exceeded.
+[2026-05-20 05:20:07] ERROR: No Cloudflare challenge found.
+2026-05-20 05:20:07,455 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:20:09] ERROR: No Cloudflare challenge found.
+2026-05-20 05:20:09,244 [ERROR] No Cloudflare challenge found.
+[2026-05-20 05:21:10] WARNING: Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:21:10,144 [WARNING] Attempt 1 failed: Page.goto: Timeout 60000ms exceeded.
+2026-05-20 05:22:09,441 [WARNING] PSG Wonen timed out, retrying once ...
+2026-05-20 05:24:09,441 [WARNING] PSG Wonen timed out after 120s, skipping
+2026-05-20 05:26:09,573 [CRITICAL] 3 consecutive fetch failures (last: timeout). Browser likely wedged — exiting so Docker restarts the container.
+
+=== Watchtower logs (last 40 lines) ===
+time="2026-05-20T03:48:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T03:53:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T03:58:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:03:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:08:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:13:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:18:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:23:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:28:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:33:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:38:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:43:15Z" level=info msg="Session done" Failed=0 Scanned=5 Updated=0 notify=no
+time="2026-05-20T04:48:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:53:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T04:58:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:03:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:08:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:13:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:18:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:23:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:28:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:33:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:38:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:43:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:48:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:53:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T05:58:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:03:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:08:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:13:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:18:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:23:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:28:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:33:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:38:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:43:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:48:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:53:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T06:58:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+time="2026-05-20T07:03:15Z" level=info msg="Session done" Failed=0 Scanned=4 Updated=0 notify=no
+
+=== Disk ===
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        96G   17G   80G  18% /
+
+=== Memory ===
+               total        used        free      shared  buff/cache   available
+Mem:           7.8Gi       1.5Gi       826Mi       1.5Mi       5.7Gi       6.2Gi
+Swap:             0B          0B          0B
