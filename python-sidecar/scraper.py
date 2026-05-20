@@ -3,7 +3,6 @@ import logging
 import os
 import re
 import sqlite3
-import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -1413,7 +1412,11 @@ def _record_fetch_failure(reason: str) -> None:
             send_telegram_alert(f"♻️ <b>Sidecar self-restart</b> — {msg}")
         except Exception:
             log.exception("Failed to send self-restart Telegram alert")
-        sys.exit(1)
+        # Hard exit: the wedged fetch still occupies the _fetch_pool worker
+        # thread. sys.exit() would hang forever in the concurrent.futures
+        # atexit handler joining that thread, so the process never dies and
+        # Docker never restarts it. os._exit() skips atexit/thread-join.
+        os._exit(1)
 
 
 def _scrape_paginated(name, url_template, parser, existing_urls):
