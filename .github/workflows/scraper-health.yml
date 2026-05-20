@@ -3,32 +3,55 @@ name: Scraper health check
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   health:
     runs-on: ubuntu-latest
     steps:
-      - name: Check scraper health
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HOSTINGER_HOST }}
-          username: ${{ secrets.HOSTINGER_USER }}
-          key: ${{ secrets.HOSTINGER_SSH_KEY }}
-          script: |
-            echo "=== Container Status ==="
-            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      - uses: actions/checkout@v4
 
-            echo ""
-            echo "=== Sidecar Errors (last 200 lines) ==="
-            sudo docker logs --tail 200 scraper-sidecar 2>&1 | grep -iE "error|fatal|crash|panic|timed out|traceback" || echo "No errors found"
+      - name: Run recovery check over SSH
+        env:
+          SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOSTINGER_HOST }}
+          SSH_USER: ${{ secrets.HOSTINGER_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/vps_key
+          chmod 600 ~/.ssh/vps_key
+          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$SSH_USER@$SSH_HOST" 'bash -s' > recovery-check.txt 2>&1 <<'EOSSH'
+          echo "=== Generated: $(date -u) UTC ==="
+          echo
+          echo "=== Container status ==="
+          sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}\t{{.Image}}"
+          echo
+          echo "=== Sidecar inspect (restart/exit info) ==="
+          sudo docker inspect scraper-sidecar --format 'RestartCount={{.RestartCount}} Status={{.State.Status}} Running={{.State.Running}} StartedAt={{.State.StartedAt}} FinishedAt={{.State.FinishedAt}} LastExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}}'
+          echo
+          echo "=== Sidecar logs (last 500 lines) ==="
+          sudo docker logs --tail 500 scraper-sidecar 2>&1
+          echo
+          echo "=== Sidecar errors/restarts in last 800 lines ==="
+          sudo docker logs --tail 800 scraper-sidecar 2>&1 | grep -iE "error|fatal|crash|panic|timed out|timeout|traceback|self-restart|wedged|exiting" || echo "No matches"
+          echo
+          echo "=== Watchtower logs (last 40 lines) ==="
+          sudo docker logs --tail 40 watchtower 2>&1
+          echo
+          echo "=== Disk ==="
+          df -h /
+          echo
+          echo "=== Memory ==="
+          free -h
+          EOSSH
+          echo "---- recovery-check.txt ----"
+          cat recovery-check.txt
 
-            echo ""
-            echo "=== Main Scraper Errors (last 200 lines) ==="
-            sudo docker logs --tail 200 makelaar-scraper 2>&1 | grep -iE "error|fatal|crash|panic" || echo "No errors found"
-
-            echo ""
-            echo "=== Disk Usage ==="
-            df -h /
-
-            echo ""
-            echo "=== Memory ==="
-            free -h
+      - name: Commit report to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add recovery-check.txt
+          git commit -m "chore: capture recovery check report [skip ci]" || { echo "nothing to commit"; exit 0; }
+          git push origin HEAD:${{ github.ref_name }}
