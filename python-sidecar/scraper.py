@@ -39,7 +39,7 @@ TELEGRAM_ALERT_CHAT_IDS = os.environ.get("TELEGRAM_ALERT_CHAT_IDS", "")
 # Site URLs
 # ---------------------------------------------------------------------------
 
-PARARIUS_URL = "https://www.pararius.nl/huurwoningen/delft/0-1500"
+PARARIUS_URL = "https://www.pararius.nl/huurwoningen/delft/0-1500/page-{page}"
 FUNDA_URL = (
     "https://www.funda.nl/zoeken/huur"
     "?selected_area=%5B%22delft%22%5D&price=%220-1500%22"
@@ -195,13 +195,17 @@ def save_houses(conn, houses):
 # ---------------------------------------------------------------------------
 
 def send_telegram(houses):
+    """Notify all chats about each house. Returns the houses that were
+    delivered to every chat — only those should be persisted, so a failed
+    send is retried on the next cycle instead of being silently lost."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
         log.warning("Telegram not configured, skipping notifications")
-        return
+        return houses
 
     chat_ids = [c.strip() for c in TELEGRAM_CHAT_IDS.split(",") if c.strip()]
     api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
+    delivered = []
     for house in houses:
         text = (
             "\U0001f6a8 <b>Nieuw huis gevonden!</b> \U0001f6a8\n\n"
@@ -214,6 +218,7 @@ def send_telegram(houses):
             f"URL: {house['url']}"
             "</blockquote>"
         )
+        ok = True
         for chat_id in chat_ids:
             body = json.dumps(
                 {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
@@ -227,6 +232,10 @@ def send_telegram(houses):
                 urllib.request.urlopen(req, timeout=10)
             except Exception as exc:
                 log.error("Telegram send to %s failed: %s", chat_id, exc)
+                ok = False
+        if ok:
+            delivered.append(house)
+    return delivered
 
 
 def send_telegram_alert(message: str) -> None:
@@ -1606,17 +1615,22 @@ def run_cycle():
                 log.info("%s: %d scraped, %d new", name, len(all_houses), len(houses))
 
             if houses:
-                save_houses(conn, houses)
-                all_new.extend(houses)
-                existing_urls.update(h["url"] for h in houses)
+                sent = send_telegram(houses)
+                if sent:
+                    save_houses(conn, sent)
+                    all_new.extend(sent)
+                    existing_urls.update(h["url"] for h in sent)
+                unsent = len(houses) - len(sent)
+                if unsent:
+                    log.warning(
+                        "%s: %d listing(s) not saved — Telegram send failed, "
+                        "will retry next cycle", name, unsent,
+                    )
         except TimeoutError:
             log.warning("%s timed out after %ds, skipping", name, FETCH_TIMEOUT)
             send_telegram_alert(f"⚠️ <b>{name}</b> timed out after {FETCH_TIMEOUT}s — skipped")
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
-
-    if all_new:
-        send_telegram(all_new)
 
     conn.close()
     return all_new
