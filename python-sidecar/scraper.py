@@ -410,9 +410,15 @@ def scrape_vbt(page) -> list[dict[str, str]]:
             container = items[0]
 
             city_el = container.css("div")
-            city = (
+            city_raw = (
                 (city_el[0].text or city_el[0].get_all_text() or "").strip()
                 if city_el else ""
+            )
+            # css("div") can match a wrapper whose get_all_text() flattens the
+            # whole listing; keep only the first line so the city stays a city.
+            city = next(
+                (line.strip() for line in city_raw.splitlines() if line.strip()),
+                "",
             )
 
             addr_el = container.css("span.normal")
