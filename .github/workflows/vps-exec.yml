@@ -129,44 +129,44 @@ jobs:
                 ;;
 
               pararius-url-probe)
-                sudo docker exec scraper-sidecar python3 - <<'PYEOF'
-from scrapling.fetchers import StealthyFetcher
+                sudo docker exec -i scraper-sidecar python3 - <<'PYEOF'
+            from scrapling.fetchers import StealthyFetcher
 
-base = "https://www.pararius.nl/huurwoningen/delft/0-1500"
-cands = {
-    "base":              base,
-    "path-after-price":  base + "/page-2",
-    "path-before-price": "https://www.pararius.nl/huurwoningen/delft/page-2/0-1500",
-    "query":             base + "?page=2",
-}
+            base = "https://www.pararius.nl/huurwoningen/delft/0-1500"
+            cands = {
+                "base":              base,
+                "path-after-price":  base + "/page-2",
+                "path-before-price": "https://www.pararius.nl/huurwoningen/delft/page-2/0-1500",
+                "query":             base + "?page=2",
+            }
 
-def hrefs(p):
-    els = p.css("li.search-list__item--listing") or p.css("section.listing-search-item") or []
-    out = []
-    for e in els:
-        a = e.css("a.listing-search-item__link--title")
-        if a:
-            out.append(a[0].attrib.get("href", ""))
-    return out
+            def hrefs(p):
+                els = p.css("li.search-list__item--listing") or p.css("section.listing-search-item") or []
+                out = []
+                for e in els:
+                    a = e.css("a.listing-search-item__link--title")
+                    if a:
+                        out.append(a[0].attrib.get("href", ""))
+                return out
 
-results = {}
-for name, u in cands.items():
-    try:
-        p = StealthyFetcher.fetch(u, headless=True, solve_cloudflare=True, network_idle=True)
-        ls = hrefs(p)
-        print(f"{name:18s} req={u}")
-        print(f"{'':18s} final={getattr(p, 'url', '?')}  listings={len(ls)}  first={ls[0] if ls else None}")
-        results[name] = ls
-    except Exception as e:
-        print(f"{name:18s} ERROR {e!r}")
+            results = {}
+            for name, u in cands.items():
+                try:
+                    p = StealthyFetcher.fetch(u, headless=True, solve_cloudflare=True, network_idle=True)
+                    ls = hrefs(p)
+                    print(f"{name:18s} req={u}")
+                    print(f"{'':18s} final={getattr(p, 'url', '?')}  listings={len(ls)}  first={ls[0] if ls else None}")
+                    results[name] = ls
+                except Exception as e:
+                    print(f"{name:18s} ERROR {e!r}")
 
-b = set(results.get("base", []))
-print("--- overlap with page 1 (low overlap = genuine page 2) ---")
-for name, ls in results.items():
-    if name == "base":
-        continue
-    print(f"{name:18s} overlap={len(b & set(ls))}/{len(ls)}")
-PYEOF
+            b = set(results.get("base", []))
+            print("--- overlap with page 1 (low overlap = genuine page 2) ---")
+            for name, ls in results.items():
+                if name == "base":
+                    continue
+                print(f"{name:18s} overlap={len(b & set(ls))}/{len(ls)}")
+            PYEOF
                 ;;
 
               watchtower-logs)
