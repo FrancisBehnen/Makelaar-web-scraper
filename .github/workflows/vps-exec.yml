@@ -20,7 +20,6 @@ on:
           - scraper-cycle-status
           - scraper-db-stats
           - scraper-last-new
-          - pararius-url-probe
           - watchtower-logs
           - system-disk
           - system-memory
@@ -126,35 +125,6 @@ jobs:
                 echo ""
                 echo "=== Telegram Notifications Sent ==="
                 sudo docker logs --tail 2000 scraper-sidecar 2>&1 | grep -iE "telegram|notification" | tail -10
-                ;;
-
-              pararius-url-probe)
-                sudo docker exec -i scraper-sidecar python3 - <<'PYEOF'
-            import scraper
-
-            page = scraper._fetch_with_timeout(
-                "https://www.pararius.nl/huurwoningen/delft/0-1500"
-            )
-            raw = page.css("li.search-list__item--listing") or page.css(
-                "section.listing-search-item"
-            )
-            houses = scraper.scrape_pararius(page)
-            conn = scraper.init_db()
-            existing = scraper.get_existing_urls(conn)
-            new = [h for h in houses if h["url"] not in existing]
-
-            print(f"page-1 raw listing elements : {len(raw)}")
-            print(f"page-1 parsed (city-filtered): {len(houses)}")
-            print(f"DB total houses             : {len(existing)}")
-            print(f"DB Pararius houses          : {sum('pararius' in u for u in existing)}")
-            print(f"would-be-NEW on page 1      : {len(new)}")
-            for h in new:
-                print(f"  NEW {h['url']} | {h['straatnaamHuisnummer']} | {h['plaats']} | {h['vraagprijs']}")
-            print("--- first 5 parsed listings ---")
-            for h in houses[:5]:
-                tag = "IN-DB" if h["url"] in existing else "NEW"
-                print(f"  [{tag}] {h['url']} | {h['plaats']} | {h['vraagprijs']}")
-            PYEOF
                 ;;
 
               watchtower-logs)
