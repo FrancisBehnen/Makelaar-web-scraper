@@ -1568,9 +1568,13 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
         try:
             page = _fetch_with_timeout(url)
         except TimeoutError:
-            log.warning("%s page %d timed out after %ds, skipping", name, page_num, FETCH_TIMEOUT)
-            send_telegram_alert(f"⚠️ <b>{name}</b> page {page_num} timed out after {FETCH_TIMEOUT}s — skipped")
-            break
+            log.warning("%s page %d timed out, retrying once ...", name, page_num)
+            try:
+                page = _fetch_with_timeout(url)
+            except TimeoutError:
+                log.warning("%s page %d timed out after %ds, skipping", name, page_num, FETCH_TIMEOUT)
+                send_telegram_alert(f"⚠️ <b>{name}</b> page {page_num} timed out after {FETCH_TIMEOUT}s — skipped")
+                break
         page_houses = parser(page)
         if not page_houses:
             break
