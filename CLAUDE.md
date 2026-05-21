@@ -41,6 +41,7 @@ proxy limitations. Use GitHub Actions workflows instead.
 - Always use `-R FrancisBehnen/Makelaar-web-scraper` flag with `gh` commands.
 - Always pass `--ref main` to `gh workflow run` (proxy can't resolve default branch).
 - To read workflow output: use `gh run list` then `gh api repos/FrancisBehnen/Makelaar-web-scraper/actions/runs/<id>/jobs` (direct `gh run view --log` returns 403 through the proxy).
+- If the `gh` CLI is unavailable, dispatch workflows directly via the GitHub REST API: `curl -X POST -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/FrancisBehnen/Makelaar-web-scraper/actions/workflows/<file>.yml/dispatches -d '{"ref":"main","inputs":{...}}'` (and fetch run logs from `.../actions/runs/<id>/logs`).
 
 ### Quick Workflows
 
