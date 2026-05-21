@@ -130,42 +130,30 @@ jobs:
 
               pararius-url-probe)
                 sudo docker exec -i scraper-sidecar python3 - <<'PYEOF'
-            from scrapling.fetchers import StealthyFetcher
+            import scraper
 
-            base = "https://www.pararius.nl/huurwoningen/delft/0-1500"
-            cands = {
-                "base":              base,
-                "path-after-price":  base + "/page-2",
-                "path-before-price": "https://www.pararius.nl/huurwoningen/delft/page-2/0-1500",
-                "query":             base + "?page=2",
-            }
+            page = scraper._fetch_with_timeout(
+                "https://www.pararius.nl/huurwoningen/delft/0-1500"
+            )
+            raw = page.css("li.search-list__item--listing") or page.css(
+                "section.listing-search-item"
+            )
+            houses = scraper.scrape_pararius(page)
+            conn = scraper.init_db()
+            existing = scraper.get_existing_urls(conn)
+            new = [h for h in houses if h["url"] not in existing]
 
-            def hrefs(p):
-                els = p.css("li.search-list__item--listing") or p.css("section.listing-search-item") or []
-                out = []
-                for e in els:
-                    a = e.css("a.listing-search-item__link--title")
-                    if a:
-                        out.append(a[0].attrib.get("href", ""))
-                return out
-
-            results = {}
-            for name, u in cands.items():
-                try:
-                    p = StealthyFetcher.fetch(u, headless=True, solve_cloudflare=True, network_idle=True)
-                    ls = hrefs(p)
-                    print(f"{name:18s} req={u}")
-                    print(f"{'':18s} final={getattr(p, 'url', '?')}  listings={len(ls)}  first={ls[0] if ls else None}")
-                    results[name] = ls
-                except Exception as e:
-                    print(f"{name:18s} ERROR {e!r}")
-
-            b = set(results.get("base", []))
-            print("--- overlap with page 1 (low overlap = genuine page 2) ---")
-            for name, ls in results.items():
-                if name == "base":
-                    continue
-                print(f"{name:18s} overlap={len(b & set(ls))}/{len(ls)}")
+            print(f"page-1 raw listing elements : {len(raw)}")
+            print(f"page-1 parsed (city-filtered): {len(houses)}")
+            print(f"DB total houses             : {len(existing)}")
+            print(f"DB Pararius houses          : {sum('pararius' in u for u in existing)}")
+            print(f"would-be-NEW on page 1      : {len(new)}")
+            for h in new:
+                print(f"  NEW {h['url']} | {h['straatnaamHuisnummer']} | {h['plaats']} | {h['vraagprijs']}")
+            print("--- first 5 parsed listings ---")
+            for h in houses[:5]:
+                tag = "IN-DB" if h["url"] in existing else "NEW"
+                print(f"  [{tag}] {h['url']} | {h['plaats']} | {h['vraagprijs']}")
             PYEOF
                 ;;
 
