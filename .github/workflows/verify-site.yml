@@ -1,0 +1,47 @@
+name: Verify site parser
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: Site name (as in scraper.py SITES)
+        required: true
+        default: Nationaal Grondbezit
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install browser system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 libxt6 \
+            libasound2t64 libpango-1.0-0 libcairo2 libatk1.0-0 \
+            fonts-liberation xvfb
+
+      - name: Install Python deps
+        working-directory: python-sidecar
+        run: |
+          pip install -r requirements.txt
+          scrapling install
+
+      - name: Run parser
+        working-directory: python-sidecar
+        run: xvfb-run -a python verify_site.py "${{ inputs.site }}"
+
+      - name: Upload dumped HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-html
+          path: python-sidecar/data/debug/
+          if-no-files-found: ignore

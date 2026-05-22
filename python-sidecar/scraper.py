@@ -77,6 +77,9 @@ ZOMAKELAARS_URL = (
 IKWILHUREN_URL = "https://ikwilhuren.nu/aanbod/delft/"
 ZEVENTIGWONEN_URL = "https://www.070wonen.nl/huurwoningen/"
 DEBRUYNENTAK_URL = "https://www.debruynentak.nl/aanbod/woningen/te-huur/delft/"
+# National landlord — its ?location= filter takes a single city, so we fetch
+# the full overview and narrow to the Delft area with is_delft_area/MAX_PRICE.
+NATIONAALGRONDBEZIT_URL = "https://www.nationaalgrondbezit.nl/huuraanbod"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1478,6 +1481,108 @@ def scrape_debruynentak(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Nationaal Grondbezit parser
+# Detail URLs look like /huuraanbod/<City>/<address-slug>. The site's own
+# location filter only works through the front page, so the whole overview is
+# fetched and narrowed with is_delft_area/MAX_PRICE.
+# ---------------------------------------------------------------------------
+
+def scrape_nationaalgrondbezit(page) -> list[dict[str, str]]:
+    from urllib.parse import unquote
+
+    dump_html(page, "nationaalgrondbezit")
+    houses: list[dict[str, str]] = []
+
+    detail_re = re.compile(r"/huuraanbod/[^/]+/[^/]+$")
+
+    def _listing_hrefs(el) -> set[str]:
+        found: set[str] = set()
+        for a in el.css('a[href*="/huuraanbod/"]'):
+            href = a.attrib.get("href", "")
+            if detail_re.search(href.split("?")[0].rstrip("/")):
+                found.add(href)
+        return found
+
+    anchors_by_href: dict[str, object] = {}
+    for a in page.css('a[href*="/huuraanbod/"]'):
+        href = a.attrib.get("href", "")
+        if href and href not in anchors_by_href and detail_re.search(
+            href.split("?")[0].rstrip("/")
+        ):
+            anchors_by_href[href] = a
+    log.info(
+        "Nationaal Grondbezit: %d listing elements found", len(anchors_by_href)
+    )
+
+    for href, anchor in anchors_by_href.items():
+        try:
+            url = make_absolute(href, "https://www.nationaalgrondbezit.nl")
+
+            path = href.split("?")[0].rstrip("/")
+            m = detail_re.search(path)
+            city_slug, addr_slug = m.group(0).split("/")[2:4]
+            city = unquote(city_slug).replace("-", " ").strip().title()
+
+            if city and not is_delft_area(city):
+                continue
+
+            # Widen to the largest ancestor that still holds only this
+            # listing's links, so price/area text outside the anchor is in
+            # scope without pulling in a neighbouring card.
+            card = anchor
+            for _ in range(6):
+                parent = card.parent
+                if parent and _listing_hrefs(parent) == {href}:
+                    card = parent
+                else:
+                    break
+
+            address = _first_text(card, "h2", "h3", ".title", ".address")
+            if not address:
+                address = unquote(addr_slug).replace("-", " ").strip().title()
+
+            all_text = card.get_all_text() or ""
+
+            price = ""
+            price_match = re.search(r"€\s*[\d.,]+", all_text)
+            if price_match:
+                price = price_match.group(0).strip()
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            area = ""
+            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
+            if area_match:
+                area = f"{area_match.group(1)} m²"
+
+            rooms = ""
+            rooms_match = re.search(
+                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
+            )
+            if rooms_match:
+                rooms = rooms_match.group(0).strip()
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or "Onbekend",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning(
+                "Nationaal Grondbezit: failed to parse a listing: %s", exc
+            )
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1501,6 +1606,7 @@ SITES = [
     ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
     ("070 Wonen", ZEVENTIGWONEN_URL, scrape_070wonen),
     ("De Bruyn en Tak", DEBRUYNENTAK_URL, scrape_debruynentak),
+    ("Nationaal Grondbezit", NATIONAALGRONDBEZIT_URL, scrape_nationaalgrondbezit),
 ]
 
 
