@@ -1,6 +1,6 @@
 # Makelaar Web Scraper
 
-## Python Sidecar (19 sites)
+## Python Sidecar (20 sites)
 
 Scrapling-based scraper in `python-sidecar/`. Bypasses Cloudflare via StealthyFetcher, writes to the same SQLite DB as the Bun app, sends its own Telegram notifications. Docker service name: `scraper-sidecar`.
 
