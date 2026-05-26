@@ -87,7 +87,11 @@ FRISIA_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("FRISIA_MAX_FETCHES_PER_CYCLE", "10")
 )
 OUDEDELFT_URL = "https://oudedelft.com/huur-2/"
-PSGWONEN_URL = "https://www.psg-wonen.nl/woningaanbod/huur"
+# PSG Wonen shares the Hayweb platform with Prinsenstad; its per-segment
+# sitemap exposes residential rentals directly.
+PSGWONEN_SITEMAP_URL = (
+    "https://www.psg-wonen.nl/sitemap_listings_res_rent.xml"
+)
 VANGULDEN_URL = "https://vanguldenmakelaardij.nl/huuraanbod/"
 ZOMAKELAARS_URL = (
     "https://www.zomakelaars.nl/aanbod/woningaanbod/vestiging-906351/huur/"
@@ -1299,6 +1303,71 @@ def scrape_rentaroom_via_sitemap(
 
 
 # ---------------------------------------------------------------------------
+# PSG Wonen via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Same Hayweb platform as Prinsenstad — _parse_hayweb_listing handles both.
+
+def _parse_psgwonen_listing(url: str, body: bytes) -> dict[str, str] | None:
+    return _parse_hayweb_listing(url, body)
+
+
+def scrape_psgwonen_via_sitemap(
+    existing_urls: set[str],
+) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(PSGWONEN_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("PSG Wonen: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("PSG Wonen: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("PSG Wonen: sitemap has %d total URLs", len(all_urls))
+
+    # Slug carries the city ("…/huur/rijswijk/…"). The sitemap also includes
+    # taxonomy aggregations like ".../type-appartement" — those have no
+    # Huurprijs row and get rejected by the parser, but skipping them up front
+    # saves a fetch.
+    candidates = [
+        u for u in all_urls
+        if is_delft_area(u.replace("-", " "))
+        and not u.rstrip("/").rsplit("/", 1)[-1].startswith("type-")
+    ]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "PSG Wonen: %d candidates in Delft area, %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("PSG Wonen: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_psgwonen_listing(url, body)
+        except Exception as exc:
+            log.warning("PSG Wonen: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("PSG Wonen: %d new rental match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Oude Delft parser (WordPress + AngularJS LSCF plugin)
 # Content is rendered client-side by AngularJS; StealthyFetcher may not
 # trigger the Angular digest cycle, so this parser may return 0 results.
@@ -1381,68 +1450,6 @@ def scrape_oudedelft(page) -> list[dict[str, str]]:
 # PSG Wonen parser (Haystack platform)
 # ---------------------------------------------------------------------------
 
-def scrape_psgwonen(page) -> list[dict[str, str]]:
-    dump_html(page, "psgwonen")
-    houses: list[dict[str, str]] = []
-
-    listings = page.css("article")
-    log.info("PSG Wonen: %d listing elements found", len(listings))
-
-    for listing in listings:
-        try:
-            link_els = listing.css("div.datacontainer a")
-            if not link_els:
-                continue
-            href = link_els[0].attrib.get("href", "")
-            if not href:
-                continue
-            url = make_absolute(href, "https://www.psg-wonen.nl")
-
-            raw_address = _first_text(listing, "h3.obj_address")
-            address = re.sub(
-                r"^(Onder bod|Te huur|Verhuurd|Nieuw in verhuur)\s*:\s*",
-                "",
-                raw_address,
-                flags=re.IGNORECASE,
-            ).strip()
-
-            city = ""
-            city_match = re.search(r"\d{4}\s*[A-Z]{2}\s+(.+)$", address)
-            if city_match:
-                city = city_match.group(1).strip()
-                address = address[: city_match.start()].strip().rstrip(",")
-
-            price = _first_text(listing, "span.obj_price")
-
-            rooms_el = listing.css("span.object_rooms span")
-            rooms = (rooms_el[-1].text or "").strip() if rooms_el else ""
-            if rooms and rooms.isdigit():
-                rooms = f"{rooms} kamers" if int(rooms) != 1 else "1 kamer"
-
-            area_el = listing.css("span.object_sqfeet span[title]")
-            area = (area_el[0].text or "").strip() if area_el else ""
-
-            if city and not is_delft_area(city):
-                continue
-
-            price_val = parse_price_euros(price)
-            if price_val and price_val > MAX_PRICE:
-                continue
-
-            houses.append(
-                {
-                    "url": url,
-                    "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": city or "Onbekend",
-                    "vraagprijs": price,
-                    "oppervlakte": area,
-                    "kamers": rooms,
-                }
-            )
-        except Exception as exc:
-            log.warning("PSG Wonen: failed to parse a listing: %s", exc)
-
-    return houses
 
 
 # ---------------------------------------------------------------------------
@@ -1859,7 +1866,6 @@ SITES = [
     ("Pactum Vastgoed", PACTUM_URL, scrape_pactum),
     ("VW Makelaars", VWMAKELAARS_URL, scrape_vwmakelaars),
     ("Oude Delft", OUDEDELFT_URL, scrape_oudedelft),
-    ("PSG Wonen", PSGWONEN_URL, scrape_psgwonen),
     ("Van Gulden Makelaardij", VANGULDEN_URL, scrape_vangulden),
     ("ZO Makelaars", ZOMAKELAARS_URL, scrape_zomakelaars),
     ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
@@ -1875,6 +1881,7 @@ CUSTOM_SITES = [
     ("Marloes Makelaars", scrape_marloes_via_sitemap),
     ("Prinsenstad Makelaardij", scrape_prinsenstad_via_sitemap),
     ("Rent a Room Delft", scrape_rentaroom_via_sitemap),
+    ("PSG Wonen", scrape_psgwonen_via_sitemap),
 ]
 
 
