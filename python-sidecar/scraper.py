@@ -14,8 +14,16 @@ FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
 MAX_CONSECUTIVE_FETCH_FAILURES = int(
     os.environ.get("MAX_CONSECUTIVE_FETCH_FAILURES", "3")
 )
+TIMEOUT_ALERT_THROTTLE_SECONDS = int(
+    os.environ.get("TIMEOUT_ALERT_THROTTLE_SECONDS", str(6 * 3600))
+)
 _fetch_pool = ThreadPoolExecutor(max_workers=1)
 _consecutive_fetch_failures = 0
+# Distinct URLs that have failed since the last successful fetch. A single sick
+# site that keeps timing out is not a wedged browser, so the global counter
+# only ticks for URLs we haven't already counted in this streak.
+_failed_urls_in_streak: set[str] = set()
+_last_timeout_alert: dict[str, float] = {}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -260,6 +268,20 @@ def send_telegram_alert(message: str) -> None:
             urllib.request.urlopen(req, timeout=10)
         except Exception as exc:
             log.error("Telegram alert to %s failed: %s", chat_id, exc)
+
+
+def send_throttled_timeout_alert(key: str, message: str) -> None:
+    """Send a per-site timeout alert at most once per TIMEOUT_ALERT_THROTTLE_SECONDS."""
+    now = time.time()
+    last = _last_timeout_alert.get(key, 0.0)
+    if now - last < TIMEOUT_ALERT_THROTTLE_SECONDS:
+        log.info(
+            "Suppressing repeat timeout alert for %s (last sent %.0fs ago)",
+            key, now - last,
+        )
+        return
+    _last_timeout_alert[key] = now
+    send_telegram_alert(message)
 
 
 # ---------------------------------------------------------------------------
@@ -1622,21 +1644,28 @@ def _fetch_with_timeout(url: str) -> object:
     try:
         page = future.result(timeout=FETCH_TIMEOUT)
     except TimeoutError:
-        _record_fetch_failure("timeout")
+        _record_fetch_failure(url, "timeout")
         raise
     except Exception as exc:
         # Playwright/Camoufox sometimes wedges the browser; once that happens
         # every subsequent fetch hangs. Count these alongside timeouts so the
         # self-heal threshold can trip from either symptom.
         if "Page crashed" in str(exc):
-            _record_fetch_failure("page crashed")
+            _record_fetch_failure(url, "page crashed")
         raise
     _consecutive_fetch_failures = 0
+    _failed_urls_in_streak.clear()
     return page
 
 
-def _record_fetch_failure(reason: str) -> None:
+def _record_fetch_failure(url: str, reason: str) -> None:
     global _consecutive_fetch_failures
+    # The wedge detector trips on the *browser* being broken, not on a single
+    # site being down. If the same URL fails again before any success resets
+    # the streak, treat it as the site's problem and don't count it.
+    if url in _failed_urls_in_streak:
+        return
+    _failed_urls_in_streak.add(url)
     _consecutive_fetch_failures += 1
     if _consecutive_fetch_failures >= MAX_CONSECUTIVE_FETCH_FAILURES:
         msg = (
@@ -1679,7 +1708,10 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
                 page = _fetch_with_timeout(url)
             except TimeoutError:
                 log.warning("%s page %d timed out after %ds, skipping", name, page_num, FETCH_TIMEOUT)
-                send_telegram_alert(f"⚠️ <b>{name}</b> page {page_num} timed out after {FETCH_TIMEOUT}s — skipped")
+                send_throttled_timeout_alert(
+                    f"{name}#page{page_num}",
+                    f"⚠️ <b>{name}</b> page {page_num} timed out after {FETCH_TIMEOUT}s — skipped",
+                )
                 break
         page_houses = parser(page)
         if not page_houses:
@@ -1738,7 +1770,10 @@ def run_cycle():
                     )
         except TimeoutError:
             log.warning("%s timed out after %ds, skipping", name, FETCH_TIMEOUT)
-            send_telegram_alert(f"⚠️ <b>{name}</b> timed out after {FETCH_TIMEOUT}s — skipped")
+            send_throttled_timeout_alert(
+                name,
+                f"⚠️ <b>{name}</b> timed out after {FETCH_TIMEOUT}s — skipped",
+            )
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
