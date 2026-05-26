@@ -55,9 +55,10 @@ FUNDA_URL = (
     "?selected_area=%5B%22delft%22%5D&price=%220-1500%22"
 )
 VBT_URL = "https://vbtverhuurmakelaars.nl/woningen?city=delft&maxPrice=1500"
-MARLOES_URL = (
-    "https://www.marloesmakelaars.nl/aanbod/huur/"
-    "?interior=&bedrooms=&min_price=&max_price=1500&city=DELFT&address="
+# Marloes' /aanbod/huur/ index is browser-render-friendly but the listing CPT
+# sitemap covers every property — fetched directly we skip the JS path.
+MARLOES_SITEMAP_URL = (
+    "https://www.marloesmakelaars.nl/wp-sitemap-posts-property-1.xml"
 )
 HOFVANDELFT_URL = (
     "https://www.hofvandelft.nl/aanbod/woningaanbod/DELFT/+5km/-1500/huur/"
@@ -522,62 +523,6 @@ def scrape_vbt(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Marloes Makelaars parser
-# ---------------------------------------------------------------------------
-
-def scrape_marloes(page) -> list[dict[str, str]]:
-    dump_html(page, "marloes")
-    houses: list[dict[str, str]] = []
-
-    listings = page.css("article.object")
-    log.info("Marloes: %d listing elements found", len(listings))
-
-    for listing in listings:
-        try:
-            link_els = listing.css("a")
-            href = link_els[0].attrib.get("href", "") if link_els else ""
-            if not href:
-                continue
-            url = make_absolute(href, "https://www.marloesmakelaars.nl")
-
-            address = _first_text(listing, "h2")
-            price = _first_text(listing, "h4")
-
-            city = ""
-            area = ""
-            rooms = ""
-            dts = listing.css("dt")
-            dds = listing.css("dd")
-            for dt, dd in zip(dts, dds):
-                label = (dt.text or "").strip().lower()
-                val = (dd.text or "").strip()
-                if "plaats" in label:
-                    city = val
-                elif "oppervlakte" in label:
-                    area = val
-                elif "slaapkamer" in label or "kamer" in label:
-                    rooms = val
-
-            if city and not is_delft_area(city):
-                continue
-
-            houses.append(
-                {
-                    "url": url,
-                    "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": city or "Delft",
-                    "vraagprijs": price,
-                    "oppervlakte": area,
-                    "kamers": rooms,
-                }
-            )
-        except Exception as exc:
-            log.warning("Marloes: failed to parse a listing: %s", exc)
-
-    return houses
-
-
-# ---------------------------------------------------------------------------
 # Hof van Delft parser
 # ---------------------------------------------------------------------------
 
@@ -1005,7 +950,8 @@ def scrape_rentaroom(page) -> list[dict[str, str]]:
 # datacenter IPs running a stealth browser. The XML sitemap and individual
 # property detail pages are still served over plain HTTP, so we walk those.
 
-_FRISIA_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+_FRISIA_SITEMAP_NS = _SITEMAP_NS
 
 
 def _parse_frisia_listing(url: str, body: bytes) -> dict[str, str] | None:
@@ -1110,6 +1056,110 @@ def scrape_frisia_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
             houses.append(listing)
 
     log.info("Frisia: %d new rental match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Marloes Makelaars via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# The /aanbod/huur/ index renders fine via Camoufox, but the WordPress
+# property CPT sitemap covers the same listings without launching a browser.
+# Marloes mixes sales and rentals in one feed — rentals say "per maand" in
+# the Prijs row, sales say "kosten koper"/"k.k."/"v.o.n.".
+
+def _parse_marloes_listing(url: str, body: bytes) -> dict[str, str] | None:
+    """Extract one Marloes rental from a detail-page HTML body, or None to skip."""
+    a = Adaptor(content=body, url=url)
+
+    fields: dict[str, str] = {}
+    for dt, dd in zip(a.css("dl dt"), a.css("dl dd")):
+        label = (dt.text or "").strip().lower()
+        if not label:
+            continue
+        val = (dd.text or "").strip() or (dd.get_all_text() or "").strip()
+        fields[label] = val
+
+    price = fields.get("prijs", "")
+    if "per maand" not in price.lower():
+        return None
+
+    price_val = parse_price_euros(price)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    city = fields.get("plaats", "")
+    if city and not is_delft_area(city):
+        return None
+
+    # <title> is "Street Number te CITY | Marloes Makelaars" — the H1 only
+    # carries the street name, so the title is the most reliable address source.
+    title_els = a.css("title")
+    title = (title_els[0].text or "").strip() if title_els else ""
+    address = title.split(" | ", 1)[0].strip()
+    if city:
+        address = re.sub(
+            rf"\s+te\s+{re.escape(city)}\s*$", "", address, flags=re.I
+        ).strip()
+
+    rooms = fields.get("slaapkamers", "")
+    if rooms.isdigit():
+        rooms = f"{rooms} slaapkamer" if rooms == "1" else f"{rooms} slaapkamers"
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": (city or "Delft").title(),
+        "vraagprijs": price,
+        "oppervlakte": fields.get("oppervlakte", ""),
+        "kamers": rooms,
+    }
+
+
+def scrape_marloes_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(MARLOES_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Marloes: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Marloes: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Marloes: sitemap has %d total URLs", len(all_urls))
+
+    # Slugs carry the city ("…-te-delft/"), so non-Delft listings can be
+    # dropped without spending a fetch on them.
+    candidates = [u for u in all_urls if is_delft_area(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Marloes: %d candidates in Delft area, %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Marloes: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_marloes_listing(url, body)
+        except Exception as exc:
+            log.warning("Marloes: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Marloes: %d new rental match(es)", len(houses))
     return houses
 
 
@@ -1668,7 +1718,6 @@ SITES = [
     ("Pararius", PARARIUS_URL, scrape_pararius),
     ("Funda", FUNDA_URL, scrape_funda),
     ("VBT Verhuurmakelaars", VBT_URL, scrape_vbt),
-    ("Marloes Makelaars", MARLOES_URL, scrape_marloes),
     ("Hof van Delft", HOFVANDELFT_URL, scrape_hofvandelft),
     ("123Wonen", EENTWEEDRIEWONEN_URL, scrape_123wonen),
     ("Rotsvast", ROTSVAST_URL, scrape_rotsvast),
@@ -1690,6 +1739,7 @@ SITES = [
 # function (existing_urls) -> list[house] that handles its own fetching.
 CUSTOM_SITES = [
     ("Frisia Makelaars", scrape_frisia_via_sitemap),
+    ("Marloes Makelaars", scrape_marloes_via_sitemap),
 ]
 
 
