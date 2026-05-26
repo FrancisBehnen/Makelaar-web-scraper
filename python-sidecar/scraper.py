@@ -75,7 +75,10 @@ PRINSENSTAD_SITEMAP_URL = (
 )
 PACTUM_URL = "https://www.pactumvastgoed.nl/huurwoningen"
 VWMAKELAARS_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/"
-RENTAROOM_URL = "https://rent-a-room-delft.nl/grid-default/"
+# Rent a Room's Houzez theme exposes one Yoast sitemap per CPT; the
+# property-sitemap covers the actual aanbod. The listing-sitemap is full of
+# Houzez demo data, not real listings — ignore it.
+RENTAROOM_SITEMAP_URL = "https://rent-a-room-delft.nl/property-sitemap.xml"
 # Frisia's WAF refuses Camoufox at the TCP layer on the listings index. The
 # sitemap and individual property pages still serve over plain HTTP, so we
 # walk the sitemap instead of rendering the search page.
@@ -830,54 +833,6 @@ def scrape_vwmakelaars(page) -> list[dict[str, str]]:
 # Rent a Room Delft parser (WordPress / Estatik)
 # ---------------------------------------------------------------------------
 
-def scrape_rentaroom(page) -> list[dict[str, str]]:
-    dump_html(page, "rentaroom")
-    houses: list[dict[str, str]] = []
-
-    listings = page.css("div.item-listing-wrap")
-    log.info("Rent a Room: %d listing elements found", len(listings))
-
-    for listing in listings:
-        try:
-            title_link = listing.css("h2.item-title a")
-            if not title_link:
-                continue
-            href = title_link[0].attrib.get("href", "")
-            if not href:
-                continue
-            url = make_absolute(href, "https://rent-a-room-delft.nl")
-
-            title_text = (title_link[0].text or "").strip()
-            address = title_text
-            city = ""
-            if "," in title_text:
-                address = title_text.rsplit(",", 1)[0].strip()
-                city = title_text.rsplit(",", 1)[1].strip()
-
-            if city and not is_delft_area(city):
-                continue
-
-            price = _first_text(listing, "li.item-price")
-
-            area_el = listing.css("li.h-area span.hz-figure")
-            area = f"{(area_el[0].text or '').strip()} m²" if area_el else ""
-
-            rooms = ""
-
-            houses.append(
-                {
-                    "url": url,
-                    "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": city or "Delft",
-                    "vraagprijs": price,
-                    "oppervlakte": area,
-                    "kamers": rooms,
-                }
-            )
-        except Exception as exc:
-            log.warning("Rent a Room: failed to parse a listing: %s", exc)
-
-    return houses
 
 
 # ---------------------------------------------------------------------------
@@ -1224,6 +1179,122 @@ def scrape_prinsenstad_via_sitemap(
             houses.append(listing)
 
     log.info("Prinsenstad: %d new rental match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Rent a Room Delft via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Houzez WordPress theme. The property-sitemap.xml is the real CPT feed;
+# Houzez also ships a listing-sitemap that's full of demo data (NY/Vegas) —
+# ignore that one.
+
+def _parse_rentaroom_listing(url: str, body: bytes) -> dict[str, str] | None:
+    a = Adaptor(content=body, url=url)
+
+    # /property/ root (sitemap also includes the CPT archive itself) — no price.
+    price_els = a.css("li.item-price")
+    if not price_els:
+        return None
+    price = (price_els[0].text or "").strip() or (
+        price_els[0].get_all_text() or ""
+    ).strip()
+    if not price:
+        return None
+
+    price_val = parse_price_euros(price)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    # Status row: "Property Status: For Rent" — skip Sold / Verkocht etc.
+    status_els = a.css("li.prop_status")
+    if status_els:
+        status_txt = (status_els[0].get_all_text() or "").strip().lower()
+        if status_txt and not (
+            "for rent" in status_txt or "te huur" in status_txt
+        ):
+            return None
+
+    addr_els = a.css("address.item-address")
+    full_address = ""
+    if addr_els:
+        full_address = (addr_els[0].get_all_text() or "").strip()
+    parts = [p.strip() for p in full_address.split(",") if p.strip()]
+    address = parts[0] if parts else ""
+    city = parts[-1] if len(parts) >= 2 else ""
+    if city and not is_delft_area(city):
+        return None
+
+    area = ""
+    for li in a.css("#property-detail-wrap li"):
+        text = (li.get_all_text() or "").strip()
+        m = re.match(r"property size[^:]*:\s*(\S.*)", text, re.I)
+        if m:
+            raw = m.group(1).strip()
+            if raw and "m" not in raw.lower():
+                raw = f"{raw} m²" if any(c.isdigit() for c in raw) else raw
+            area = raw
+            break
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": "",
+    }
+
+
+def scrape_rentaroom_via_sitemap(
+    existing_urls: set[str],
+) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(RENTAROOM_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Rent a Room: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Rent a Room: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Rent a Room: sitemap has %d total URLs", len(all_urls))
+
+    # Drop the CPT archive itself; only walk individual properties.
+    candidates = [
+        u for u in all_urls
+        if u.rstrip("/").rsplit("/", 1)[-1] != "property"
+    ]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Rent a Room: %d property URL(s), %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Rent a Room: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_rentaroom_listing(url, body)
+        except Exception as exc:
+            log.warning("Rent a Room: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Rent a Room: %d new rental match(es)", len(houses))
     return houses
 
 
@@ -1787,7 +1858,6 @@ SITES = [
     ("Rotsvast", ROTSVAST_URL, scrape_rotsvast),
     ("Pactum Vastgoed", PACTUM_URL, scrape_pactum),
     ("VW Makelaars", VWMAKELAARS_URL, scrape_vwmakelaars),
-    ("Rent a Room Delft", RENTAROOM_URL, scrape_rentaroom),
     ("Oude Delft", OUDEDELFT_URL, scrape_oudedelft),
     ("PSG Wonen", PSGWONEN_URL, scrape_psgwonen),
     ("Van Gulden Makelaardij", VANGULDEN_URL, scrape_vangulden),
@@ -1804,6 +1874,7 @@ CUSTOM_SITES = [
     ("Frisia Makelaars", scrape_frisia_via_sitemap),
     ("Marloes Makelaars", scrape_marloes_via_sitemap),
     ("Prinsenstad Makelaardij", scrape_prinsenstad_via_sitemap),
+    ("Rent a Room Delft", scrape_rentaroom_via_sitemap),
 ]
 
 
