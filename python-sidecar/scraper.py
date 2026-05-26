@@ -67,9 +67,11 @@ EENTWEEDRIEWONEN_URL = "https://www.123wonen.nl/huurwoningen/in/delft"
 ROTSVAST_URL = (
     "https://www.rotsvast.nl/huren/?search=Delft&radius=5&price_to=1500"
 )
-PRINSENSTAD_URL = (
-    "https://prinsenstadmakelaardij.nl/woningaanbod/huur"
-    "?availability=1&pricerange.maxprice=1500"
+# Prinsenstad publishes its (Hayweb-platform) listings via per-segment
+# sitemaps. The residential rent feed is the relevant one — currently usually
+# empty, but the platform updates it as listings come online.
+PRINSENSTAD_SITEMAP_URL = (
+    "https://prinsenstadmakelaardij.nl/sitemap_listings_res_rent.xml"
 )
 PACTUM_URL = "https://www.pactumvastgoed.nl/huurwoningen"
 VWMAKELAARS_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/"
@@ -727,71 +729,6 @@ def scrape_rotsvast(page) -> list[dict[str, str]]:
 # Prinsenstad Makelaardij parser (Haystack platform)
 # ---------------------------------------------------------------------------
 
-def scrape_prinsenstad(page) -> list[dict[str, str]]:
-    dump_html(page, "prinsenstad")
-    houses: list[dict[str, str]] = []
-
-    listings = _find_elements(
-        page,
-        ".object_list_container .object_data",
-        ".object_list_container a[href*='/object/']",
-        "div.object_list a[href]",
-    )
-    log.info("Prinsenstad: %d listing elements found", len(listings))
-
-    for listing in listings:
-        try:
-            href = listing.attrib.get("href", "")
-            if not href:
-                link_els = listing.css("a[href]")
-                if link_els:
-                    href = link_els[0].attrib.get("href", "")
-            if not href:
-                continue
-            url = make_absolute(href, "https://prinsenstadmakelaardij.nl")
-
-            all_text = listing.get_all_text() or ""
-            address = _first_text(
-                listing, ".street_name", ".address", "h2", "h3"
-            )
-            city = _first_text(listing, ".city", ".locality")
-
-            if city and not is_delft_area(city):
-                continue
-
-            price = ""
-            price_match = re.search(r"€\s*[\d.,]+", all_text)
-            if price_match:
-                price = price_match.group(0).strip()
-
-            area = ""
-            area_match = re.search(r"(\d+)\s*m[²2]", all_text)
-            if area_match:
-                area = f"{area_match.group(1)} m²"
-
-            rooms = ""
-            rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
-            )
-            if rooms_match:
-                rooms = rooms_match.group(0).strip()
-
-            houses.append(
-                {
-                    "url": url,
-                    "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": city or "Delft",
-                    "vraagprijs": price,
-                    "oppervlakte": area,
-                    "kamers": rooms,
-                }
-            )
-        except Exception as exc:
-            log.warning("Prinsenstad: failed to parse a listing: %s", exc)
-
-    return houses
-
-
 # ---------------------------------------------------------------------------
 # Pactum Vastgoed parser (Webflow)
 # ---------------------------------------------------------------------------
@@ -1160,6 +1097,133 @@ def scrape_marloes_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
             houses.append(listing)
 
     log.info("Marloes: %d new rental match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Prinsenstad Makelaardij via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Hayweb platform (same as PSG Wonen). The Huurprijs row in the feature
+# table marks rentals; sale listings carry "Vraagprijs" / "k.k." instead and
+# don't appear in this sitemap anyway.
+
+def _parse_hayweb_listing(url: str, body: bytes) -> dict[str, str] | None:
+    """Shared parser for Hayweb-platform sites (Prinsenstad, PSG Wonen)."""
+    a = Adaptor(content=body, url=url)
+
+    fields: dict[str, str] = {}
+    for row in a.css("table.feautures tr"):
+        label_els = row.css("td.object_detail_title")
+        if not label_els:
+            continue
+        cells = row.css("td")
+        if len(cells) < 2:
+            continue
+        label = (label_els[0].text or "").strip().lower()
+        val = (cells[-1].text or "").strip() or (
+            cells[-1].get_all_text() or ""
+        ).strip()
+        if label:
+            fields.setdefault(label, val)
+
+    price = fields.get("huurprijs", "")
+    if not price:
+        return None
+
+    price_val = parse_price_euros(price)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    h1_els = a.css("h1")
+    h1 = (h1_els[0].get_all_text() or "").strip() if h1_els else ""
+    # "Te huur: Paulus Potterlaan 15, 2282 GD Rijswijk" → strip status prefix
+    header = re.sub(
+        r"^(Te huur|Te koop|Verhuurd|Verkocht|Onder bod|Nieuw in verhuur)\s*:\s*",
+        "",
+        h1,
+        flags=re.I,
+    ).strip()
+    parts = [p.strip() for p in header.split(",") if p.strip()]
+    address = parts[0] if parts else "Onbekend"
+    city = ""
+    if len(parts) >= 2:
+        # second segment: "2282 GD Rijswijk" — drop the postal code
+        city = re.sub(r"^\d{4}\s*[A-Z]{2}\s*", "", parts[-1]).strip()
+
+    if city and not is_delft_area(city):
+        return None
+
+    area = fields.get("woonoppervlakte", "")
+    rooms_raw = fields.get("aantal kamers", "")
+    # "5 (waarvan 4 slaapkamers)" → "5 kamers"
+    rooms_num = re.match(r"(\d+)", rooms_raw)
+    if rooms_num:
+        n = rooms_num.group(1)
+        rooms = "1 kamer" if n == "1" else f"{n} kamers"
+    else:
+        rooms = rooms_raw
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def _parse_prinsenstad_listing(url: str, body: bytes) -> dict[str, str] | None:
+    return _parse_hayweb_listing(url, body)
+
+
+def scrape_prinsenstad_via_sitemap(
+    existing_urls: set[str],
+) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(PRINSENSTAD_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Prinsenstad: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Prinsenstad: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Prinsenstad: sitemap has %d total URLs", len(all_urls))
+
+    # Slugs encode the city ("…/huur/delft/…"); non-Delft listings can be
+    # dropped before spending a fetch on them.
+    candidates = [u for u in all_urls if is_delft_area(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Prinsenstad: %d candidates in Delft area, %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Prinsenstad: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_prinsenstad_listing(url, body)
+        except Exception as exc:
+            log.warning("Prinsenstad: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Prinsenstad: %d new rental match(es)", len(houses))
     return houses
 
 
@@ -1721,7 +1785,6 @@ SITES = [
     ("Hof van Delft", HOFVANDELFT_URL, scrape_hofvandelft),
     ("123Wonen", EENTWEEDRIEWONEN_URL, scrape_123wonen),
     ("Rotsvast", ROTSVAST_URL, scrape_rotsvast),
-    ("Prinsenstad Makelaardij", PRINSENSTAD_URL, scrape_prinsenstad),
     ("Pactum Vastgoed", PACTUM_URL, scrape_pactum),
     ("VW Makelaars", VWMAKELAARS_URL, scrape_vwmakelaars),
     ("Rent a Room Delft", RENTAROOM_URL, scrape_rentaroom),
@@ -1740,6 +1803,7 @@ SITES = [
 CUSTOM_SITES = [
     ("Frisia Makelaars", scrape_frisia_via_sitemap),
     ("Marloes Makelaars", scrape_marloes_via_sitemap),
+    ("Prinsenstad Makelaardij", scrape_prinsenstad_via_sitemap),
 ]
 
 
