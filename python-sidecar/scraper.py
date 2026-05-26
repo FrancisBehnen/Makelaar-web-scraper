@@ -5,10 +5,12 @@ import re
 import sqlite3
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 from scrapling.fetchers import StealthyFetcher
+from scrapling.parser import Adaptor
 
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
 MAX_CONSECUTIVE_FETCH_FAILURES = int(
@@ -71,10 +73,12 @@ PRINSENSTAD_URL = (
 PACTUM_URL = "https://www.pactumvastgoed.nl/huurwoningen"
 VWMAKELAARS_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/huur/"
 RENTAROOM_URL = "https://rent-a-room-delft.nl/grid-default/"
-FRISIA_URL = (
-    "https://frisiamakelaars.nl/wonen/aanbod/"
-    "?buy_rent=rent&rent_price=-1500"
-    "&order_by=created_at-desc"
+# Frisia's WAF refuses Camoufox at the TCP layer on the listings index. The
+# sitemap and individual property pages still serve over plain HTTP, so we
+# walk the sitemap instead of rendering the search page.
+FRISIA_SITEMAP_URL = "https://frisiamakelaars.nl/sitemap/properties.xml"
+FRISIA_MAX_FETCHES_PER_CYCLE = int(
+    os.environ.get("FRISIA_MAX_FETCHES_PER_CYCLE", "10")
 )
 OUDEDELFT_URL = "https://oudedelft.com/huur-2/"
 PSGWONEN_URL = "https://www.psg-wonen.nl/woningaanbod/huur"
@@ -128,6 +132,20 @@ def make_absolute(href: str, base: str) -> str:
         parsed = urlparse(base)
         return f"{parsed.scheme}://{parsed.netloc}{href}"
     return f"{base.rstrip('/')}/{href}"
+
+
+# Plain-HTTP user agent for sites that refuse Camoufox at the TCP layer but
+# answer ordinary HTTP. Used by the sitemap-based fetchers.
+_PLAIN_HTTP_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _http_get(url: str, timeout: int = 30) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": _PLAIN_HTTP_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def _first_text(container, *selectors: str) -> str:
@@ -981,79 +999,117 @@ def scrape_rentaroom(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Frisia Makelaars parser (Move.nl platform)
+# Frisia Makelaars discovery via sitemap + per-listing plain HTTP
 # ---------------------------------------------------------------------------
+# Frisia's listings index (/wonen/aanbod?...) is refused at the TCP layer for
+# datacenter IPs running a stealth browser. The XML sitemap and individual
+# property detail pages are still served over plain HTTP, so we walk those.
 
-def scrape_frisia(page) -> list[dict[str, str]]:
-    dump_html(page, "frisia")
+_FRISIA_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+
+def _parse_frisia_listing(url: str, body: bytes) -> dict[str, str] | None:
+    """Extract one Frisia rental from a detail-page HTML body, or None to skip."""
+    a = Adaptor(content=body, url=url)
+
+    # Rent vs sale: rentals carry a panel-block feature labelled "Huurprijs".
+    rent_block = next(
+        (
+            b for b in a.css(".panel__block__feature")
+            if "Huurprijs" in b.get_all_text(separator=" ", strip=True)
+        ),
+        None,
+    )
+    if rent_block is None:
+        return None
+
+    price_line = rent_block.get_all_text(separator=" ", strip=True)
+    price = price_line.split("Huurprijs", 1)[-1].strip(" |")
+    price_val = parse_price_euros(price)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    h1 = a.css("h1")
+    full_address = h1[0].get_all_text(separator=" ", strip=True) if h1 else ""
+    # Typical h1 text: "Plesmanweg 611 , 2597 JG, 's-Gravenhage"
+    parts = [p.strip() for p in full_address.split(",") if p.strip()]
+    street = parts[0] if parts else "Onbekend"
+    city = parts[-1] if len(parts) >= 2 else ""
+    if city and not is_delft_area(city):
+        return None
+
+    area = ""
+    rooms = ""
+    for li in a.css(".section--intro__list li"):
+        val = li.get_all_text(separator=" ", strip=True)
+        if li.css(".icon-livearea"):
+            area = val
+        elif li.css(".icon-bedroom"):
+            rooms = val
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": street or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_frisia_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(FRISIA_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Frisia: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Frisia: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _FRISIA_SITEMAP_NS):
+        loc = u.find("sm:loc", _FRISIA_SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Frisia: sitemap has %d total URLs", len(all_urls))
+
+    # The slug embeds the city, so we can drop most listings (Den Haag etc.)
+    # without spending a request on them. False positives just cost one extra
+    # fetch and are discarded after parsing the real city out of the page.
+    candidates = [u for u in all_urls if is_delft_area(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Frisia: %d candidates in Delft area, %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    if len(new_candidates) > FRISIA_MAX_FETCHES_PER_CYCLE:
+        log.info(
+            "Frisia: capping detail fetches at %d this cycle",
+            FRISIA_MAX_FETCHES_PER_CYCLE,
+        )
+        new_candidates = new_candidates[:FRISIA_MAX_FETCHES_PER_CYCLE]
+
     houses: list[dict[str, str]] = []
-
-    listings = page.css(".card.card--object")
-    log.info("Frisia: %d listing elements found", len(listings))
-
-    for listing in listings:
+    for url in new_candidates:
         try:
-            link_els = listing.css("a.card__anchor")
-            if not link_els:
-                continue
-            href = link_els[0].attrib.get("href", "")
-            if not href:
-                continue
-            url = make_absolute(href, "https://frisiamakelaars.nl")
-
-            if "/verkocht-verhuurd/" in url or "/wonen/koop/" in url:
-                continue
-
-            label_els = listing.css(".card--default__figure__labels span")
-            label_text = " ".join(
-                (el.text or "").strip().lower() for el in label_els
-            )
-            if "verkocht" in label_text or "verhuurd" in label_text:
-                continue
-
-            address = _first_text(listing, ".card--default__body h5", "h5")
-
-            city = ""
-            city_els = listing.css(".card--default__body small")
-            if city_els:
-                city_text = (city_els[0].text or "").strip()
-                if "," in city_text:
-                    city = city_text.split(",")[-1].strip()
-
-            if city and not is_delft_area(city):
-                continue
-
-            price_el = listing.css(".card--default__footer strong")
-            price = (price_el[0].text or "").strip() if price_el else ""
-
-            price_val = parse_price_euros(price)
-            if price_val and price_val > MAX_PRICE:
-                continue
-
-            area = ""
-            rooms = ""
-            features = listing.css(".features li")
-            for feat in features:
-                small = feat.css("small")
-                val = (small[0].text or "").strip() if small else ""
-                if feat.css(".icon-livearea"):
-                    area = val
-                elif feat.css(".icon-door"):
-                    rooms = val
-
-            houses.append(
-                {
-                    "url": url,
-                    "straatnaamHuisnummer": address or "Onbekend",
-                    "plaats": city or "Delft",
-                    "vraagprijs": price,
-                    "oppervlakte": area,
-                    "kamers": rooms,
-                }
-            )
+            body = _http_get(url)
         except Exception as exc:
-            log.warning("Frisia: failed to parse a listing: %s", exc)
+            log.warning("Frisia: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_frisia_listing(url, body)
+        except Exception as exc:
+            log.warning("Frisia: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
 
+    log.info("Frisia: %d new rental match(es)", len(houses))
     return houses
 
 
@@ -1620,7 +1676,6 @@ SITES = [
     ("Pactum Vastgoed", PACTUM_URL, scrape_pactum),
     ("VW Makelaars", VWMAKELAARS_URL, scrape_vwmakelaars),
     ("Rent a Room Delft", RENTAROOM_URL, scrape_rentaroom),
-    ("Frisia Makelaars", FRISIA_URL, scrape_frisia),
     ("Oude Delft", OUDEDELFT_URL, scrape_oudedelft),
     ("PSG Wonen", PSGWONEN_URL, scrape_psgwonen),
     ("Van Gulden Makelaardij", VANGULDEN_URL, scrape_vangulden),
@@ -1629,6 +1684,12 @@ SITES = [
     ("070 Wonen", ZEVENTIGWONEN_URL, scrape_070wonen),
     ("De Bruyn en Tak", DEBRUYNENTAK_URL, scrape_debruynentak),
     ("Nationaal Grondbezit", NATIONAALGRONDBEZIT_URL, scrape_nationaalgrondbezit),
+]
+
+# Sites that don't fit the StealthyFetcher → parser pattern. Each entry is a
+# function (existing_urls) -> list[house] that handles its own fetching.
+CUSTOM_SITES = [
+    ("Frisia Makelaars", scrape_frisia_via_sitemap),
 ]
 
 
@@ -1735,6 +1796,23 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
     return houses
 
 
+def _deliver_new_houses(conn, name, houses, existing_urls, all_new):
+    """Send new houses to Telegram, persist what was delivered, and log misses."""
+    if not houses:
+        return
+    sent = send_telegram(houses)
+    if sent:
+        save_houses(conn, sent)
+        all_new.extend(sent)
+        existing_urls.update(h["url"] for h in sent)
+    unsent = len(houses) - len(sent)
+    if unsent:
+        log.warning(
+            "%s: %d listing(s) not saved — Telegram send failed, "
+            "will retry next cycle", name, unsent,
+        )
+
+
 def run_cycle():
     conn = init_db()
     existing_urls = get_existing_urls(conn)
@@ -1756,24 +1834,20 @@ def run_cycle():
                 houses = [h for h in all_houses if h["url"] not in existing_urls]
                 log.info("%s: %d scraped, %d new", name, len(all_houses), len(houses))
 
-            if houses:
-                sent = send_telegram(houses)
-                if sent:
-                    save_houses(conn, sent)
-                    all_new.extend(sent)
-                    existing_urls.update(h["url"] for h in sent)
-                unsent = len(houses) - len(sent)
-                if unsent:
-                    log.warning(
-                        "%s: %d listing(s) not saved — Telegram send failed, "
-                        "will retry next cycle", name, unsent,
-                    )
+            _deliver_new_houses(conn, name, houses, existing_urls, all_new)
         except TimeoutError:
             log.warning("%s timed out after %ds, skipping", name, FETCH_TIMEOUT)
             send_throttled_timeout_alert(
                 name,
                 f"⚠️ <b>{name}</b> timed out after {FETCH_TIMEOUT}s — skipped",
             )
+        except Exception as exc:
+            log.error("%s scrape failed: %s", name, exc, exc_info=True)
+
+    for name, fetcher in CUSTOM_SITES:
+        try:
+            houses = fetcher(existing_urls)
+            _deliver_new_houses(conn, name, houses, existing_urls, all_new)
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
