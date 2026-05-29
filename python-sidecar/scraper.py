@@ -233,6 +233,55 @@ def save_houses(conn, houses):
 # Telegram (matches the Bun app's message format)
 # ---------------------------------------------------------------------------
 
+# Standard introduction letter sent to the makelaar. ADRES_PLACEHOLDER is
+# replaced with the listing's street + house number before sending.
+ADRES_PLACEHOLDER = "[[ADRES]]"
+
+AANMELDBRIEF_TEMPLATE = (
+    "Geachte mevrouw, meneer,\n\n"
+    f"Zojuist zagen wij jullie woning op de {ADRES_PLACEHOLDER}. Mijn partner "
+    "Francis en ik, Corlien, zijn op zoek naar een eerste thuis om in te gaan "
+    "samenwonen, nu wij allebei onderhand zijn afgestudeerd en aan banen zijn "
+    "gestart. We hebben elkaar leren kennen via de Delftse "
+    "studentenzeilvereniging en zijn zo verliefd geworden op Delft, dat we "
+    "hier in de regio graag zouden willen blijven wonen. We zien hier ons al "
+    "helemaal wonen! Graag zouden wij ons daarom aan willen melden voor de "
+    "bezichtiging van het appartement.\n\n"
+    "Zelf ben ik recent afgestudeerd scheikundige en start ik deze maand als "
+    "junior chemicus bij Lignitec, een Delftse startup in biobouwmaterialen. "
+    "Daarnaast ben ik al een aantal jaar werkzaam als retailspecialist bij "
+    "Sounds, een platenzaak in het centrum van Delft. Daar ben ik tijdens mijn "
+    "studententijd terecht gekomen als bijbaan, omdat ik al jaren LP's "
+    "verzamel. Daar blijf ik nog part-time werkzaam. Mijn inkomen zit vanaf "
+    "deze maand gecombineerd tussen de €1750 - €2250 per maand.\n\n"
+    "Mijn partner Francis werkt als AI-specialist bij Coolblue waar hij met "
+    "veel enthousiasme z'n steentje bijdraagt aan de AI-revolutie. Hij heeft "
+    "een achtergrond in technische informatica in Delft. Hij verdient tussen "
+    "de €3000 - €3500 per maand.\n\n"
+    "Wij zouden graag de woning komen bezichtigen. Zou u ons kunnen laten "
+    "weten wanneer de bezichtiging is en of wij zouden mogen komen? We zien "
+    "uit naar uw reactie! Bij voorbaat hartelijk dank voor uw tijd.\n\n"
+    "Met vriendelijke groet,\n"
+    "Corlien Douma\n"
+    "+31646853193"
+)
+
+
+def _escape_html(text: str) -> str:
+    """Escape the characters that are special inside Telegram HTML messages."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def format_aanmeldbrief(straatnaam_huisnummer: str) -> str:
+    """Build the aanmeldbrief for an address, wrapped in a <pre> code block so
+    Telegram renders it with a one-tap copy button. (Telegram's dedicated
+    copy_text inline button is capped at 256 chars, too short for the letter.)"""
+    brief = AANMELDBRIEF_TEMPLATE.replace(
+        ADRES_PLACEHOLDER, straatnaam_huisnummer
+    )
+    return f"<pre>{_escape_html(brief)}</pre>"
+
+
 def send_telegram(houses):
     """Notify all chats about each house. Returns the houses that were
     delivered to every chat — only those should be persisted, so a failed
@@ -255,7 +304,9 @@ def send_telegram(houses):
             f"Oppervlakte: {house['oppervlakte']}\n"
             f"Kamers: {house['kamers']}\n"
             f"URL: {house['url']}"
-            "</blockquote>"
+            "</blockquote>\n\n"
+            "\U0001f4cb <b>Aanmeldbrief</b> (tik op het kopieer-icoon):\n"
+            + format_aanmeldbrief(house["straatnaamHuisnummer"])
         )
         ok = True
         for chat_id in chat_ids:
