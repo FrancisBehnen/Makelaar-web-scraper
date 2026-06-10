@@ -3,9 +3,6 @@ services:
     image: ghcr.io/francisbehnen/makelaar-web-scraper:main
     container_name: makelaar-scraper
     restart: unless-stopped
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS}
     volumes:
       - scraper-data:/app/data
 
@@ -20,6 +17,26 @@ services:
       - DB_PATH=data/db.sqlite
       - CHECK_INTERVAL=300
       - DEBUG_DUMP=false
+    volumes:
+      - scraper-data:/app/data
+
+  scraper-responder:
+    image: ghcr.io/francisbehnen/makelaar-web-scraper-responder:main
+    container_name: scraper-responder
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS}
+      - TELEGRAM_ALERT_CHAT_IDS=${TELEGRAM_ALERT_CHAT_IDS:-}
+      - DB_PATH=data/db.sqlite
+      - DATA_DIR=data
+      - CONTACT_NAME=${CONTACT_NAME}
+      - CONTACT_EMAIL=${CONTACT_EMAIL}
+      - CONTACT_PHONE=${CONTACT_PHONE}
+      - GH_TOKEN=${GH_TOKEN:-}
+      - GH_REPO=${GH_REPO:-FrancisBehnen/Makelaar-web-scraper}
+      - POLL_INTERVAL=30
+      - FETCH_TIMEOUT=120
     volumes:
       - scraper-data:/app/data
 

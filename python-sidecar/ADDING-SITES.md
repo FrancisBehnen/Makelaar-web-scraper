@@ -35,13 +35,13 @@ Dense reference for non-obvious gotchas. Read before writing a new parser.
 - Schema is defined by the Bun app: `houses(url PK, straatnaamHuisnummer, plaats, vraagprijs, oppervlakte, kamers)` — all `TEXT`.
 - `url` must be **absolute** (prefix with base URL if the page gives relative hrefs).
 - WAL journal mode is set by the sidecar for safe concurrent reads with the Bun app. Don't change it.
-- The sidecar uses `INSERT OR REPLACE` — if a listing URL already exists, it overwrites. This means price/feature updates are captured but the Bun app won't re-notify (it already knows the URL).
+- The sidecar uses `INSERT OR REPLACE` — if a listing URL already exists, it overwrites. This means price/feature updates are captured but the listing won't be treated as new again (the URL is already known).
 
 ## Telegram
 
-- The sidecar sends its own Telegram notifications. The Bun app only notifies for listings it scrapes itself — it will never notify about sidecar-discovered listings.
-- First run on a fresh DB sends one message per listing (can be 40+ messages). This is expected; subsequent cycles only notify truly new listings.
-- Message format must match the Bun app's format (`formatForTelegram()` in `Huis.ts`) for a consistent user experience.
+- The sidecar does **not** send listing notifications. Parsers just return the dict that is stored in the `houses` table; the separate responder service watches the DB and handles all listing-facing Telegram messaging.
+- The sidecar still sends its own **operational alerts** (fetch timeouts, self-restarts) via `send_telegram_alert`, using `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_IDS` (falling back to `TELEGRAM_CHAT_IDS`).
+- New-site parsers therefore only need to fill the six DB fields correctly — there is no message format to match.
 
 ## Deployment
 

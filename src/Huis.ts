@@ -29,7 +29,6 @@ export function isHuisDTO(obj: unknown): obj is HuisDTO {
 
 export interface IHuis extends HuisDTO {
   formatForLogging(): string;
-  formatForTelegram(): string;
 }
 
 export class Huis implements IHuis {
@@ -58,15 +57,6 @@ export class Huis implements IHuis {
 
   formatForLogging(): string {
     return `Adres: ${this.straatnaamHuisnummer}
-Plaats: ${this.plaats}
-Vraagprijs: ${this.vraagprijs}
-Oppervlakte: ${this.oppervlakte}
-Kamers: ${this.kamers}
-URL: ${this.url}`;
-  }
-
-  formatForTelegram(): string {
-    return `Adres: ${this.straatnaamHuisnummer}, ${this.plaats}
 Plaats: ${this.plaats}
 Vraagprijs: ${this.vraagprijs}
 Oppervlakte: ${this.oppervlakte}
