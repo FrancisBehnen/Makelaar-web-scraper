@@ -2,7 +2,6 @@ import axios from "axios";
 import * as fs from "node:fs";
 import { Makelaar } from "./makelaar";
 import { IHuis } from "./Huis";
-import { IMessenger, TelegramMessenger } from "./telegram";
 import { IDatabase, SQLiteDatabase } from "./database";
 import domProcessors from "./response-processors";
 import { makelaars } from "./makelaars";
@@ -12,11 +11,9 @@ const CHECK_INTERVAL = 1000 * 60 * 5; // 5 minutes
 
 class App {
   readonly db: IDatabase;
-  readonly telegramMessenger: IMessenger;
 
-  constructor(db: IDatabase, telegramMessenger: IMessenger) {
+  constructor(db: IDatabase) {
     this.db = db;
-    this.telegramMessenger = telegramMessenger;
   }
 
   async scrape(makelaar: Makelaar): Promise<IHuis[]> {
@@ -52,6 +49,7 @@ class App {
 
     const currentHouses = await this.db.getHouses();
     console.log("Current houses known:", currentHouses.size);
+    let totalNewHouses = 0;
     for (const makelaar of makelaars) {
       const huizen = await this.scrape(makelaar);
       console.log(`Scraped ${huizen.length} huizen from ${makelaar.name}`);
@@ -60,9 +58,12 @@ class App {
       const newHouses = huizen.filter((huis) => !currentHouses.has(huis.url));
       console.log(`Found ${newHouses.length} new houses`);
 
-      await telegramMessenger.sendNewHouses(newHouses);
+      // Persist new houses; the responder service watches the DB and
+      // handles all listing-facing Telegram messaging.
       await this.db.saveHouses(newHouses);
+      totalNewHouses += newHouses.length;
     }
+    console.log(`Cycle done — ${totalNewHouses} new houses found`);
     this.db.disconnect();
   }
 }
@@ -74,19 +75,9 @@ class App {
 const db = new SQLiteDatabase();
 
 /**
- * Initialize the Telegram messenger
- */
-const telegramChatIds = process.env.TELEGRAM_CHAT_IDS?.split(",") || [];
-if (telegramChatIds.length === 0) {
-  throw new Error("TELEGRAM_CHAT_IDS is not set");
-}
-console.log(`Telegram chat IDs: ${telegramChatIds.join(",")}`);
-const telegramMessenger = new TelegramMessenger(telegramChatIds);
-
-/**
  * Initialize the app
  */
-const app = new App(db, telegramMessenger);
+const app = new App(db);
 const doCheck = () => {
   app
     .main()

@@ -30,6 +30,10 @@ jobs:
             context: ./python-sidecar
             dockerfile: ./python-sidecar/Dockerfile
             suffix: "-sidecar"
+          - name: responder
+            context: ./responder
+            dockerfile: ./responder/Dockerfile
+            suffix: "-responder"
 
     steps:
       - name: Checkout repository

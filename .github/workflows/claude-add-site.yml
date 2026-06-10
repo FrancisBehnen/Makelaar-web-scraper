@@ -1,0 +1,49 @@
+name: Claude add site
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  add-site:
+    if: contains(github.event.issue.labels.*.name, 'add-site') || startsWith(github.event.issue.title, 'Add site:')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claude-add-site-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Add site with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash,Read,Edit,Write,Glob,Grep,WebFetch"'
+          prompt: |
+            You are adding a new rental site to the Python sidecar scraper.
+
+            Issue #${{ github.event.issue.number }}: "${{ github.event.issue.title }}"
+            Issue body:
+            ${{ github.event.issue.body }}
+
+            Steps:
+            1. Extract the example listing URL from the issue body above and
+               determine the site's domain.
+            2. Read python-sidecar/ADDING-SITES.md and follow it to add a parser
+               for this site to python-sidecar/scraper.py. Where feasible, test
+               your selectors against the real site using
+               python-sidecar/verify_site.py before committing.
+            3. Create a branch named claude/add-site-<domain>, commit your
+               changes, push the branch, and open a pull request titled
+               "Add site: <domain>".
+            4. Comment on issue #${{ github.event.issue.number }} with a link to
+               the pull request. If the site cannot be scraped (e.g. blocked,
+               requires login, no parseable listings), do not open a PR; instead
+               comment on the issue explaining exactly what is blocking.

@@ -6,6 +6,14 @@ Scrapling-based scraper in `python-sidecar/`. Bypasses Cloudflare via StealthyFe
 
 Before adding new sites, read [`python-sidecar/ADDING-SITES.md`](python-sidecar/ADDING-SITES.md) — it covers Scrapling API gotchas, selector development workflow, and deployment steps.
 
+## Responder
+
+Python service in `responder/`. Docker service name: `scraper-responder`. Watches the shared SQLite DB for new listings and owns all listing Telegram notifications (letter behind a `📋 Brief` inline button) — the scrapers no longer send listing messages. Detects the contact route per makelaar (email / contact form / external); for forms it fills them in a headless browser and asks for approval via a screenshot with ✅/❌ buttons before submitting.
+
+Key env vars: `DB_PATH`, `DATA_DIR`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, `TELEGRAM_ALERT_CHAT_IDS` (optional), `CONTACT_NAME`, `CONTACT_EMAIL`, `CONTACT_PHONE`, `GH_TOKEN` (optional), `GH_REPO`, `POLL_INTERVAL` (default 30), `FETCH_TIMEOUT` (default 120).
+
+**Add-site flow**: sending a listing URL from an unsupported site to the Telegram bot makes the responder open a GitHub issue `Add site: {domain}` (label `add-site`). The `claude-add-site.yml` workflow then runs Claude Code to add the parser per `ADDING-SITES.md` and open a PR, commenting on the issue. Requires repo secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`).
+
 ## Hostinger VPS
 
 Deployment target for this project.

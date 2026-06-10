@@ -39,10 +39,12 @@ DB_PATH = os.environ.get("DB_PATH", "data/db.sqlite")
 SELF_RESTART_MARKER = Path(DB_PATH).parent / ".self_restart"
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 DEBUG_DUMP = os.environ.get("DEBUG_DUMP", "").lower() in ("1", "true", "yes")
+# The sidecar only sends operational alerts (timeouts, self-restarts);
+# listing notifications are owned by the responder service.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_IDS = os.environ.get("TELEGRAM_CHAT_IDS", "")
-# Operational alerts (timeouts, self-restarts) go here instead of the group
-# chat. Falls back to TELEGRAM_CHAT_IDS when unset.
+# Operational alerts go here instead of the group chat. Falls back to
+# TELEGRAM_CHAT_IDS when unset.
 TELEGRAM_ALERT_CHAT_IDS = os.environ.get("TELEGRAM_ALERT_CHAT_IDS", "")
 
 # ---------------------------------------------------------------------------
@@ -230,104 +232,9 @@ def save_houses(conn, houses):
 
 
 # ---------------------------------------------------------------------------
-# Telegram (matches the Bun app's message format)
+# Telegram (operational alerts only — listing notifications are owned by the
+# responder service, which watches the houses table in the shared DB)
 # ---------------------------------------------------------------------------
-
-# Standard introduction letter sent to the makelaar. ADRES_PLACEHOLDER is
-# replaced with the listing's street + house number before sending.
-ADRES_PLACEHOLDER = "[[ADRES]]"
-
-AANMELDBRIEF_TEMPLATE = (
-    "Geachte meneer, mevrouw,\n\n"
-    f"Zojuist zagen wij jullie woning aan de {ADRES_PLACEHOLDER}. Mijn partner "
-    "Francis en ik, Corlien, zijn op zoek naar een eerste thuis om in te gaan "
-    "samenwonen, nu wij allebei onderhand zijn afgestudeerd en aan banen zijn "
-    "gestart. We hebben elkaar leren kennen via de Delftse "
-    "studentenzeilvereniging en zijn zo verliefd geworden op Delft, dat we "
-    "hier in de regio zouden willen blijven wonen. We zien hier ons al "
-    "helemaal wonen! Graag zouden wij ons daarom aan willen melden voor de "
-    "bezichtiging van het appartement.\n\n"
-    "Zelf ben ik recent afgestudeerd scheikundige en start ik deze maand als "
-    "junior chemicus bij Lignitec, een Delftse startup in biobouwmaterialen. "
-    "Daarnaast ben ik al een aantal jaar werkzaam als retailspecialist bij "
-    "Sounds, een platenzaak in het centrum van Delft. Daar ben ik tijdens mijn "
-    "studententijd terecht gekomen als bijbaan, omdat ik al jaren LP's "
-    "verzamel. Daar blijf ik nog part-time werkzaam. Mijn inkomen zit vanaf "
-    "deze maand gecombineerd tussen de €2000 - €2500 per maand.\n\n"
-    "Mijn partner Francis werkt als AI-specialist bij Coolblue in Rotterdam, "
-    "waar hij met veel enthousiasme werkt aan de toekomst van online retail. "
-    "In 2024 heeft hij zijn master Technische Informatica (Computer Science) "
-    "afgerond aan de TU Delft. Als hij thuiskomt van werk, vindt hij het leuk "
-    "om lekker te koken. Hij verdient tussen de €3000 - €3500 per maand.\n\n"
-    "Wij zouden graag de woning komen bezichtigen. Zou u ons kunnen laten "
-    "weten wanneer de bezichtiging is en of wij zouden mogen komen? We zien "
-    "uit naar uw reactie! Bij voorbaat hartelijk dank voor uw tijd.\n\n"
-    "Met vriendelijke groet,\n"
-    "Corlien Douma\n"
-    "+31646853193"
-)
-
-
-def _escape_html(text: str) -> str:
-    """Escape the characters that are special inside Telegram HTML messages."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def format_aanmeldbrief(straatnaam_huisnummer: str) -> str:
-    """Build the aanmeldbrief for an address, wrapped in a <pre> code block so
-    Telegram renders it with a one-tap copy button. (Telegram's dedicated
-    copy_text inline button is capped at 256 chars, too short for the letter.)"""
-    brief = AANMELDBRIEF_TEMPLATE.replace(
-        ADRES_PLACEHOLDER, straatnaam_huisnummer
-    )
-    return f"<pre>{_escape_html(brief)}</pre>"
-
-
-def send_telegram(houses):
-    """Notify all chats about each house. Returns the houses that were
-    delivered to every chat — only those should be persisted, so a failed
-    send is retried on the next cycle instead of being silently lost."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
-        log.warning("Telegram not configured, skipping notifications")
-        return houses
-
-    chat_ids = [c.strip() for c in TELEGRAM_CHAT_IDS.split(",") if c.strip()]
-    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-
-    delivered = []
-    for house in houses:
-        text = (
-            "\U0001f6a8 <b>Nieuw huis gevonden!</b> \U0001f6a8\n\n"
-            "<blockquote>Gegevens van het huis:\n"
-            f"Adres: {house['straatnaamHuisnummer']}, {house['plaats']}\n"
-            f"Plaats: {house['plaats']}\n"
-            f"Vraagprijs: {house['vraagprijs']}\n"
-            f"Oppervlakte: {house['oppervlakte']}\n"
-            f"Kamers: {house['kamers']}\n"
-            f"URL: {house['url']}"
-            "</blockquote>\n\n"
-            "\U0001f4cb <b>Aanmeldbrief</b> (tik op het kopieer-icoon):\n"
-            + format_aanmeldbrief(house["straatnaamHuisnummer"])
-        )
-        ok = True
-        for chat_id in chat_ids:
-            body = json.dumps(
-                {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-            ).encode()
-            req = urllib.request.Request(
-                api_url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                urllib.request.urlopen(req, timeout=10)
-            except Exception as exc:
-                log.error("Telegram send to %s failed: %s", chat_id, exc)
-                ok = False
-        if ok:
-            delivered.append(house)
-    return delivered
-
 
 def send_telegram_alert(message: str) -> None:
     if not TELEGRAM_BOT_TOKEN:
@@ -2040,21 +1947,15 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
     return houses
 
 
-def _deliver_new_houses(conn, name, houses, existing_urls, all_new):
-    """Send new houses to Telegram, persist what was delivered, and log misses."""
+def _persist_new_houses(conn, name, houses, existing_urls, all_new):
+    """Persist new houses to the DB; the responder service picks them up
+    from there and handles all listing-facing Telegram messaging."""
     if not houses:
         return
-    sent = send_telegram(houses)
-    if sent:
-        save_houses(conn, sent)
-        all_new.extend(sent)
-        existing_urls.update(h["url"] for h in sent)
-    unsent = len(houses) - len(sent)
-    if unsent:
-        log.warning(
-            "%s: %d listing(s) not saved — Telegram send failed, "
-            "will retry next cycle", name, unsent,
-        )
+    save_houses(conn, houses)
+    all_new.extend(houses)
+    existing_urls.update(h["url"] for h in houses)
+    log.info("%s: saved %d new listing(s)", name, len(houses))
 
 
 def run_cycle():
@@ -2078,7 +1979,7 @@ def run_cycle():
                 houses = [h for h in all_houses if h["url"] not in existing_urls]
                 log.info("%s: %d scraped, %d new", name, len(all_houses), len(houses))
 
-            _deliver_new_houses(conn, name, houses, existing_urls, all_new)
+            _persist_new_houses(conn, name, houses, existing_urls, all_new)
         except TimeoutError:
             log.warning("%s timed out after %ds, skipping", name, FETCH_TIMEOUT)
             send_throttled_timeout_alert(
@@ -2091,7 +1992,7 @@ def run_cycle():
     for name, fetcher in CUSTOM_SITES:
         try:
             houses = fetcher(existing_urls)
-            _deliver_new_houses(conn, name, houses, existing_urls, all_new)
+            _persist_new_houses(conn, name, houses, existing_urls, all_new)
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
