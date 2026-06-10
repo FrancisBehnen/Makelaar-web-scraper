@@ -36,14 +36,26 @@ jobs:
             Steps:
             1. Extract the example listing URL from the issue body above and
                determine the site's domain.
-            2. Read python-sidecar/ADDING-SITES.md and follow it to add a parser
-               for this site to python-sidecar/scraper.py. Where feasible, test
-               your selectors against the real site using
-               python-sidecar/verify_site.py before committing.
+            2. Decide where the site belongs:
+               a. First probe whether the site runs on the realtime-listings
+                  platform: fetch https://<domain>/nl/realtime-listings/consumer
+                  (e.g. with curl). If it returns a JSON array of listing
+                  objects, add the site to the Bun app instead of the sidecar:
+                  append an entry to src/makelaars.ts with
+                  PlatformType.RealtimeListingsJson, mirroring the existing
+                  entries. The shared JSON processor already handles filtering
+                  (Delft-area cities, rentals, max price), so no parser code is
+                  needed. Verify with `bun install && bun run build`.
+               b. Otherwise, read python-sidecar/ADDING-SITES.md and follow it
+                  to add a parser for this site to python-sidecar/scraper.py.
+                  Where feasible, test your selectors against the real site
+                  using python-sidecar/verify_site.py before committing.
             3. Create a branch named claude/add-site-<domain>, commit your
                changes, push the branch, and open a pull request titled
                "Add site: <domain>".
             4. Comment on issue #${{ github.event.issue.number }} with a link to
-               the pull request. If the site cannot be scraped (e.g. blocked,
-               requires login, no parseable listings), do not open a PR; instead
-               comment on the issue explaining exactly what is blocking.
+               the pull request, mentioning which scraper (Bun app or sidecar)
+               the site was added to. If the site cannot be scraped (e.g.
+               blocked, requires login, no parseable listings), do not open a
+               PR; instead comment on the issue explaining exactly what is
+               blocking.
