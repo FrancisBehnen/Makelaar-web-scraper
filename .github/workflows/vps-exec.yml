@@ -121,28 +121,26 @@ jobs:
                 ;;
 
               responder-detection-stats)
-                DB=$(sudo docker inspect scraper-sidecar --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
-                if [ -n "$DB" ] && sudo test -f "$DB/db.sqlite"; then
-                  echo "=== Contact method x status (all notified listings) ==="
-                  sudo sqlite3 -header -column "$DB/db.sqlite" "SELECT COALESCE(contact_method,'(none)') AS method, status, COUNT(*) AS n FROM responses WHERE status != 'seeded' GROUP BY method, status ORDER BY method, status;"
-                  echo ""
-                  echo "=== Per site (domain x method) ==="
-                  sudo sqlite3 -header -column "$DB/db.sqlite" "
-                    WITH d AS (
-                      SELECT COALESCE(contact_method,'(none)') AS method, status,
-                        CASE WHEN instr(h,'/')>0 THEN substr(h,1,instr(h,'/')-1) ELSE h END AS domain
-                      FROM (SELECT contact_method, status,
-                              replace(replace(replace(url,'https://',''),'http://',''),'www.','') AS h
-                            FROM responses WHERE status != 'seeded')
-                    )
-                    SELECT domain, method, status, COUNT(*) AS n
-                    FROM d GROUP BY domain, method, status ORDER BY domain, method;"
-                  echo ""
-                  echo "=== Forms that fell back to manual / failed (with reason) ==="
-                  sudo sqlite3 -header -column "$DB/db.sqlite" "SELECT substr(url,1,55) AS listing, status, substr(error,1,70) AS reason FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25;"
-                else
-                  echo "Database not found at expected mount path"
-                fi
+                sudo docker exec -i scraper-sidecar python3 - <<'PY'
+            import sqlite3, collections
+            from urllib.parse import urlparse
+            db = sqlite3.connect('/app/data/db.sqlite'); db.row_factory = sqlite3.Row
+            rows = db.execute("SELECT url, COALESCE(contact_method,'(none)') AS m, status, error FROM responses WHERE status != 'seeded'").fetchall()
+            dom = lambda u: (urlparse(u).hostname or u or '').removeprefix('www.')
+            print("total notified listings:", len(rows))
+            print("\n=== method x status ===")
+            for (m, s), n in sorted(collections.Counter((r['m'], r['status']) for r in rows).items()):
+                print(f"{m:<10} {s:<18} {n}")
+            print("\n=== domain x method ===")
+            for (d, m), n in sorted(collections.Counter((dom(r['url']), r['m']) for r in rows).items()):
+                print(f"{d:<32} {m:<10} {n}")
+            print("\n=== manual / failed (reason) ===")
+            mf = [r for r in rows if r['status'] in ('manual', 'failed')]
+            for r in mf:
+                print(f"{r['status']:<8} {dom(r['url']):<26} {(r['error'] or '')[:70]}")
+            if not mf:
+                print("(none)")
+            PY
                 ;;
 
               scraper-last-new)
