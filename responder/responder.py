@@ -274,10 +274,10 @@ def _handle_callback(callback: dict) -> None:
         if not url:
             tg.answer_callback(callback_id, "Verzoek is verlopen, stuur de URL opnieuw")
             return
-        db.kv_delete(f"addsite:{arg}")
         tg.answer_callback(callback_id, "Issue wordt aangemaakt…")
         try:
             issue_url = github_issues.create_add_site_issue(url)
+            db.kv_delete(f"addsite:{arg}")
             tg.send_message(chat_id, f"✅ Issue aangemaakt: {esc(issue_url)}")
         except Exception as exc:
             log.exception("Add-site issue creation failed")
