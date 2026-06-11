@@ -16,6 +16,7 @@ on:
           - docker-restart-sidecar
           - docker-restart-main
           - docker-restart-both
+          - responder-rebuild
           - docker-compose-config
           - scraper-cycle-status
           - scraper-db-stats
@@ -89,6 +90,24 @@ jobs:
                 sudo docker restart scraper-sidecar makelaar-scraper
                 sleep 20
                 sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --format "table {{.Names}}\t{{.Status}}"
+                ;;
+
+              responder-rebuild)
+                COMPOSE=$(ls /docker/makelaar/docker-compose.yml /docker/makelaar-scraper/docker-compose.yml 2>/dev/null | head -1)
+                if [ -z "$COMPOSE" ]; then
+                  COMPOSE=$(find /docker -name "docker-compose.yml" -path "*makelaar*" 2>/dev/null | head -1)
+                fi
+                if [ -z "$COMPOSE" ]; then
+                  echo "Compose file not found"
+                  exit 1
+                fi
+                echo "Using compose file: $COMPOSE"
+                cd "$(dirname "$COMPOSE")"
+                sudo docker compose up -d --build scraper-responder
+                sleep 20
+                sudo docker ps -a --filter "name=scraper-responder" --format "table {{.Names}}\t{{.Status}}"
+                echo ""
+                sudo docker logs --tail 10 scraper-responder 2>&1
                 ;;
 
               docker-compose-config)
