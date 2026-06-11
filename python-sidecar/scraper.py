@@ -33,6 +33,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("sidecar")
 
+class _SuppressBenignCF(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "No Cloudflare challenge found" not in record.getMessage()
+
+logging.getLogger("scrapling").addFilter(_SuppressBenignCF())
+
 DB_PATH = os.environ.get("DB_PATH", "data/db.sqlite")
 # Dropped on the data volume just before a self-restart exit; its presence on
 # the next boot means the previous process self-restarted.
