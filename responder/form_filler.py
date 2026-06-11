@@ -65,6 +65,16 @@ NEWSLETTER_RE = re.compile(r"nieuwsbrief|newsletter|aanbod|updates", re.IGNORECA
 SUBMIT_TEXT_RE = re.compile(r"verstuur|verzend|versturen|submit|send", re.IGNORECASE)
 SELECT_PLACEHOLDER_RE = re.compile(r"kies|selecteer|maak een keuze|select", re.IGNORECASE)
 
+# Selects that pin the enquiry to a specific building/complex/object. Picking
+# the wrong one — or blindly the first option — sends the response about the
+# wrong listing, so these must be matched to the listing or the whole form is
+# bailed to manual. A select with a very long option list is treated as one of
+# these even without a keyword hit (e.g. MVGM's hundreds-of-complexes dropdown).
+PROPERTY_SELECT_RE = re.compile(
+    r"complex|wooncomplex|\bobject\b|\bpand\b|vestiging", re.IGNORECASE
+)
+PROPERTY_SELECT_MIN_OPTIONS = 15
+
 _COLLECT_FORMS_JS = """
 () => Array.from(document.querySelectorAll('form')).map((form, formIndex) => ({
   formIndex,
@@ -178,11 +188,53 @@ def _select_option_value(field: dict) -> str | None:
     return None
 
 
-def _plan_form(meta: dict, values: dict[str, str]) -> dict | None:
+def _real_options(field: dict) -> list[dict]:
+    return [
+        o
+        for o in field["options"] or []
+        if o["value"] and not SELECT_PLACEHOLDER_RE.search(o["text"])
+    ]
+
+
+def _option_text(field: dict, value: str) -> str:
+    for option in field["options"] or []:
+        if option["value"] == value:
+            return option["text"]
+    return value
+
+
+def _is_property_select(field: dict) -> bool:
+    if len(_real_options(field)) > PROPERTY_SELECT_MIN_OPTIONS:
+        return True
+    return bool(PROPERTY_SELECT_RE.search(_haystack(field)))
+
+
+def _match_option_to_listing(field: dict, house) -> str | None:
+    """Pick the option naming this listing's street (city as tie-breaker)."""
+    street = re.sub(r"\s*\d.*$", "", house["straatnaamHuisnummer"] or "").strip().lower()
+    city = (house["plaats"] or "").strip().lower()
+    best_value: str | None = None
+    best_score = 0
+    for option in _real_options(field):
+        text = option["text"].lower()
+        score = 0
+        if len(street) >= 4 and street in text:
+            score += 2
+        if city and city in text:
+            score += 1
+        if score > best_score:
+            best_score, best_value = score, option["value"]
+    # A street hit (>=2) is required: a city-only match is ambiguous because a
+    # city usually holds several complexes.
+    return best_value if best_score >= 2 else None
+
+
+def _plan_form(meta: dict, values: dict[str, str], house) -> dict | None:
     """Map one form's fields to a fill plan, or None if it isn't usable."""
     roles_seen: set[str] = set()
     fields: list[dict] = []
     summary: list[str] = []
+    pending_block: str | None = None  # property select we couldn't match
 
     for field in meta["fields"]:
         if not field["visible"]:
@@ -214,7 +266,21 @@ def _plan_form(meta: dict, values: dict[str, str]) -> dict | None:
             continue
 
         if field["tag"] == "select":
-            if field["required"]:
+            if _is_property_select(field):
+                value = _match_option_to_listing(field, house)
+                if value is None:
+                    pending_block = label
+                    continue
+                fields.append(
+                    {
+                        "selector": selector,
+                        "action": "select",
+                        "value": value,
+                        "label": label,
+                    }
+                )
+                summary.append(f"{label}: {_option_text(field, value)}")
+            elif field["required"]:
                 value = _select_option_value(field)
                 if value is not None:
                     fields.append(
@@ -243,6 +309,14 @@ def _plan_form(meta: dict, values: dict[str, str]) -> dict | None:
 
     if "email" not in roles_seen or "message" not in roles_seen:
         return None
+    # Only block once we know this is a real contact form (email + message):
+    # a property select we couldn't tie to the listing means we'd respond about
+    # the wrong building, so hand off to manual instead of guessing.
+    if pending_block is not None:
+        raise FormFillError(
+            f"kon niet bepalen welk complex/object bij deze woning hoort "
+            f"(veld '{pending_block}') — reageer handmatig"
+        )
     # When the form has separate first/last name fields the generic name role
     # would duplicate; values are deduplicated by roles_seen already.
     return {
@@ -255,14 +329,21 @@ def _plan_form(meta: dict, values: dict[str, str]) -> dict | None:
 
 def _build_plan(forms_meta: list[dict], house, page_url: str) -> dict:
     best: dict | None = None
+    blocker: FormFillError | None = None
     values = _role_values(house)
     for meta in forms_meta:
         if NON_CONTACT_FORM_RE.search(f'{meta["identity"]} {meta["action"]}'):
             continue
-        plan = _plan_form(meta, values)
+        try:
+            plan = _plan_form(meta, values, house)
+        except FormFillError as exc:
+            blocker = blocker or exc
+            continue
         if plan and (best is None or len(plan["roles"]) > len(best["roles"])):
             best = plan
     if best is None:
+        if blocker is not None:
+            raise blocker
         raise FormFillError(
             "geen invulbaar contactformulier gevonden (e-mail- en berichtveld vereist)"
         )

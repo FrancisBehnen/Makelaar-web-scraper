@@ -70,6 +70,24 @@ is an account-gated SPA on its own domain with no published inbox and no plain
 contact form, so "unknown" is the correct result, not a bug — the parser author
 needs to do nothing about it.
 
+### Form filling is generic too — no per-site fillers
+
+When detection finds a `form`, `form_filler.py` fills it with generic
+Dutch/English keyword heuristics (name/email/phone/subject/message, privacy
+checkboxes, required selects). You do **not** write a per-site form filler.
+
+The one trap worth knowing: some makelaars (e.g. MVGM / ikwilhuren.nu) use a
+**generic contact form with a "which building/complex" `<select>`** holding
+hundreds of options. The filler treats a select as a property selector when its
+label matches `complex|object|pand|vestiging` *or* it has a very long option
+list, and it picks the option whose text contains the listing's street (city as
+tie-breaker). If it can't confidently match — the common case, since a street
+name rarely equals a complex name — it **bails the whole form to manual**
+("reageer handmatig") rather than submit the wrong/"Algemeen" building. That is
+the intended behaviour: better a manual nudge than a response about the wrong
+listing. New parsers need to do nothing here; this is handled entirely in the
+responder.
+
 ## Deployment
 
 - The sidecar image is built locally on the VPS (not from GHCR). After code changes: SCP the updated files to `/docker/makelaar-scraper/python-sidecar/`, then `sudo docker compose up -d --build scraper-sidecar`.
