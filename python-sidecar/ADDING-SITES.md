@@ -93,6 +93,11 @@ the intended behaviour: better a manual nudge than a response about the wrong
 listing. New parsers need to do nothing here; this is handled entirely in the
 responder.
 
+The filler also **bails to manual on captchas** — not just the standard
+reCAPTCHA/hCaptcha/Turnstile widgets, but also the home-grown math sums
+("11 + 6 = ?") and image-transcribe challenges that small WordPress contact
+forms use, since it can't solve them. Again, a new parser does nothing.
+
 ## Deployment
 
 - The sidecar image is built locally on the VPS (not from GHCR). After code changes: SCP the updated files to `/docker/makelaar-scraper/python-sidecar/`, then `sudo docker compose up -d --build scraper-sidecar`.

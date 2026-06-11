@@ -83,6 +83,7 @@ gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=scraper-cycle-status
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=scraper-db-stats
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=scraper-last-new
+gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=responder-detection-stats
 
 # Watchtower
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=watchtower-logs

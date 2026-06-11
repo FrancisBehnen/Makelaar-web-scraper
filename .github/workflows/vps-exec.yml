@@ -20,6 +20,7 @@ on:
           - scraper-cycle-status
           - scraper-db-stats
           - scraper-last-new
+          - responder-detection-stats
           - watchtower-logs
           - system-disk
           - system-memory
@@ -116,6 +117,31 @@ jobs:
                 else
                   echo "Database not found at expected mount path"
                   sudo docker inspect scraper-sidecar --format '{{json .Mounts}}' | python3 -m json.tool
+                fi
+                ;;
+
+              responder-detection-stats)
+                DB=$(sudo docker inspect scraper-sidecar --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
+                if [ -n "$DB" ] && [ -f "$DB/db.sqlite" ]; then
+                  echo "=== Contact method x status (all notified listings) ==="
+                  sudo sqlite3 -header -column "$DB/db.sqlite" "SELECT COALESCE(contact_method,'(none)') AS method, status, COUNT(*) AS n FROM responses WHERE status != 'seeded' GROUP BY method, status ORDER BY method, status;"
+                  echo ""
+                  echo "=== Per site (domain x method) ==="
+                  sudo sqlite3 -header -column "$DB/db.sqlite" "
+                    WITH d AS (
+                      SELECT COALESCE(contact_method,'(none)') AS method, status,
+                        CASE WHEN instr(h,'/')>0 THEN substr(h,1,instr(h,'/')-1) ELSE h END AS domain
+                      FROM (SELECT contact_method, status,
+                              replace(replace(replace(url,'https://',''),'http://',''),'www.','') AS h
+                            FROM responses WHERE status != 'seeded')
+                    )
+                    SELECT domain, method, status, COUNT(*) AS n
+                    FROM d GROUP BY domain, method, status ORDER BY domain, method;"
+                  echo ""
+                  echo "=== Forms that fell back to manual / failed (with reason) ==="
+                  sudo sqlite3 -header -column "$DB/db.sqlite" "SELECT substr(url,1,55) AS listing, status, substr(error,1,70) AS reason FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25;"
+                else
+                  echo "Database not found at expected mount path"
                 fi
                 ;;
 
