@@ -43,6 +43,33 @@ Dense reference for non-obvious gotchas. Read before writing a new parser.
 - The sidecar still sends its own **operational alerts** (fetch timeouts, self-restarts) via `send_telegram_alert`, using `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALERT_CHAT_IDS` (falling back to `TELEGRAM_CHAT_IDS`).
 - New-site parsers therefore only need to fill the six DB fields correctly — there is no message format to match.
 
+## Contact detection (responder) — usually nothing to do
+
+Contact detection is **not** part of the parser. The responder service
+(`responder/detection.py`) runs `detect()` live on every new listing URL,
+regardless of which site it came from or when that site was added — there is
+no per-site contact registry or allowlist. So adding a parser does **not**
+require wiring up any contact info, and a site added "after" the responder
+went live is treated exactly the same as any other.
+
+`detect()` tries, in order: a fillable form on the listing page (a `<textarea>`
+plus an email input), a published e-mail / `mailto:` address, a same-domain
+contact page, then an apply link to a known external rental platform.
+
+When adding a site, only touch detection in **one** case:
+
+- **The site outsources applications to an external rental platform** not yet
+  listed in `EXTERNAL_PLATFORMS` (e.g. eazlee, huurwoningen.nl, ikwilhuren.nu,
+  woningnet, huurportaal, leadflow). Add the new platform's domain there so the
+  responder reports a "🌐 Reageren via" link instead of "unknown".
+
+For everything else, leave detection alone. In particular, **account-gated
+national landlords are expected to come back as "Geen contactmethode
+gevonden"**. Vesteda is the canonical example: its "reageren/inschrijven" flow
+is an account-gated SPA on its own domain with no published inbox and no plain
+contact form, so "unknown" is the correct result, not a bug — the parser author
+needs to do nothing about it.
+
 ## Deployment
 
 - The sidecar image is built locally on the VPS (not from GHCR). After code changes: SCP the updated files to `/docker/makelaar-scraper/python-sidecar/`, then `sudo docker compose up -d --build scraper-sidecar`.
