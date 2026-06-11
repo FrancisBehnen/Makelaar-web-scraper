@@ -114,6 +114,9 @@ NATIONAALGRONDBEZIT_URL = "https://www.nationaalgrondbezit.nl/huuraanbod"
 # Individual listing detail pages are server-side rendered with JSON-LD and
 # spec panels, so we walk the sitemap and parse detail pages directly.
 VESTEDA_SITEMAP_URL = "https://www.vesteda.com/sitemap.xml"
+VESTEDA_MAX_FETCHES_PER_CYCLE = int(
+    os.environ.get("VESTEDA_MAX_FETCHES_PER_CYCLE", "20")
+)
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1926,6 +1929,13 @@ def scrape_vesteda_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
         "Vesteda: %d candidates in Delft area, %d new",
         len(candidates), len(new_candidates),
     )
+
+    if len(new_candidates) > VESTEDA_MAX_FETCHES_PER_CYCLE:
+        log.info(
+            "Vesteda: capping detail fetches at %d this cycle",
+            VESTEDA_MAX_FETCHES_PER_CYCLE,
+        )
+        new_candidates = new_candidates[:VESTEDA_MAX_FETCHES_PER_CYCLE]
 
     houses: list[dict[str, str]] = []
     for url in new_candidates:
