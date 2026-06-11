@@ -110,6 +110,10 @@ DEBRUYNENTAK_URL = "https://www.debruynentak.nl/aanbod/woningen/te-huur/delft/"
 # National landlord — its ?location= filter takes a single city, so we fetch
 # the full overview and narrow to the Delft area with is_delft_area/MAX_PRICE.
 NATIONAALGRONDBEZIT_URL = "https://www.nationaalgrondbezit.nl/huuraanbod"
+# Vesteda is a national landlord with listings in Rijswijk and Pijnacker.
+# Individual listing detail pages are server-side rendered with JSON-LD and
+# spec panels, so we walk the sitemap and parse detail pages directly.
+VESTEDA_SITEMAP_URL = "https://www.vesteda.com/sitemap.xml"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1818,6 +1822,131 @@ def scrape_nationaalgrondbezit(page) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Vesteda via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Vesteda is a national landlord with listings in Rijswijk and Pijnacker (and
+# potentially other Delft-area cities in future). The main listings page is a
+# Vue.js SPA that calls /api/units at runtime, but the individual listing
+# detail pages are server-side rendered with JSON-LD metadata and a specs panel.
+# We walk the sitemap to discover new listings instead of rendering the SPA.
+
+def _parse_vesteda_listing(url: str, body: bytes) -> dict[str, str] | None:
+    a = Adaptor(content=body, url=url)
+
+    # Feature spec panel: three <li> items inside the hero section with the
+    # listing's key specs. Each item has a .u-heading.h4 value and a
+    # .u-heading.h6 label. The class u-fraction--4of12 (without the
+    # @from-desk suffix used elsewhere on the page) uniquely identifies them.
+    price = ""
+    rooms = ""
+    area = ""
+
+    for item in a.css("li.o-layout__cell.u-fraction--4of12"):
+        val_els = item.css(".u-heading.h4")
+        lbl_els = item.css(".u-heading.h6")
+        if not val_els or not lbl_els:
+            continue
+        value = (val_els[0].get_all_text() or "").strip()
+        label = (lbl_els[0].text or "").strip().lower()
+        if "huurprijs" in label:
+            price = value
+        elif "slaapkamer" in label:
+            n = re.match(r"(\d+)", value)
+            if n:
+                cnt = n.group(1)
+                rooms = "1 slaapkamer" if cnt == "1" else f"{cnt} slaapkamers"
+        elif "oppervlakt" in label:
+            area = value
+
+    if not price:
+        return None
+
+    price_val = parse_price_euros(price)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    # City from URL slug: /nl/huurwoningen-{city}/{neighborhood}/{slug}
+    url_m = re.search(r"/huurwoningen-([^/]+)/", url)
+    city = url_m.group(1).replace("-", " ").strip().title() if url_m else ""
+    if city and not is_delft_area(city):
+        return None
+
+    # Address from page title: "Street Housenumber  City | Vesteda"
+    title_els = a.css("title")
+    title = (title_els[0].text or "").strip() if title_els else ""
+    address = title.split(" | ", 1)[0].strip()
+    # Strip the trailing city name (vesteda inserts two spaces before it)
+    if city:
+        address = re.sub(
+            rf"\s+{re.escape(city)}\s*$", "", address, flags=re.I
+        ).strip()
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": city or "Onbekend",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_vesteda_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(VESTEDA_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Vesteda: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Vesteda: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Vesteda: sitemap has %d total URLs", len(all_urls))
+
+    # Detail listing URLs are exactly 3 path segments deep after /nl/:
+    # /nl/huurwoningen-{city}/{neighborhood}/{property-slug}
+    # City and neighborhood pages are 1–2 segments deep and are excluded.
+    listing_detail_re = re.compile(r"/nl/huurwoningen-([^/]+)/[^/]+/[^/]+$")
+    candidates: list[str] = []
+    for u in all_urls:
+        m = listing_detail_re.search(u)
+        if m and is_delft_area(m.group(1).replace("-", " ")):
+            candidates.append(u)
+
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Vesteda: %d candidates in Delft area, %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Vesteda: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_vesteda_listing(url, body)
+        except Exception as exc:
+            log.warning("Vesteda: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Vesteda: %d new rental match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1847,6 +1976,7 @@ CUSTOM_SITES = [
     ("Prinsenstad Makelaardij", scrape_prinsenstad_via_sitemap),
     ("Rent a Room Delft", scrape_rentaroom_via_sitemap),
     ("PSG Wonen", scrape_psgwonen_via_sitemap),
+    ("Vesteda", scrape_vesteda_via_sitemap),
 ]
 
 
