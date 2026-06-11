@@ -61,7 +61,12 @@ When adding a site, only touch detection in **one** case:
 - **The site outsources applications to an external rental platform** not yet
   listed in `EXTERNAL_PLATFORMS` (e.g. eazlee, huurwoningen.nl, ikwilhuren.nu,
   woningnet, huurportaal, leadflow). Add the new platform's domain there so the
-  responder reports a "🌐 Reageren via" link instead of "unknown".
+  responder reports a "🌐 Reageren via" link instead of "unknown". Note that a
+  bare link to such a platform only counts when it's the actual apply route — a
+  form posting to it, or a link whose text/href shows apply intent
+  (`reageer|inschrijf|aanmeld|aanvraag|bezichtig|…`). Plain cross-promo/footer
+  links to a sister portal (as Pararius carries to huurwoningen.nl) are ignored
+  so they don't get mistaken for the response route.
 
 For everything else, leave detection alone. In particular, **account-gated
 national landlords are expected to come back as "Geen contactmethode

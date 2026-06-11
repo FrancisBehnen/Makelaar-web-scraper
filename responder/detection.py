@@ -36,6 +36,15 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
 
 CONTACT_LINK_RE = re.compile(r"contact|reageer|bezichtig|aanvraag", re.IGNORECASE)
 
+# A link to an external rental platform is only the application route when it
+# actually reads like one. Some sites (notably Pararius) carry sister-portal or
+# footer links to these platforms that have nothing to do with responding to
+# *this* listing, so a bare platform link must show apply intent to count.
+APPLY_INTENT_RE = re.compile(
+    r"reage|inschrij|aanmeld|solliciteer|\bapply\b|aanvraag|aanvragen|bezichtig",
+    re.IGNORECASE,
+)
+
 # Rental platforms makelaars outsource their application flow to.
 EXTERNAL_PLATFORMS = (
     "eazlee.com",
@@ -157,16 +166,27 @@ def _has_captcha(page) -> bool:
 
 def _find_external(page, listing_url: str) -> str:
     site_domain = _registrable_domain(listing_url)
+    # A form that posts to an external platform is unambiguous — that *is* the
+    # application flow, so it counts regardless of any link text.
     for form in page.css("form"):
         action = form.attrib.get("action", "")
         if action.startswith("http") and _registrable_domain(action) != site_domain:
             if any(p in action for p in EXTERNAL_PLATFORMS):
                 return action
+    # A bare link to a platform only counts when the link itself shows apply
+    # intent; otherwise it's most likely cross-promotion (e.g. a Pararius footer
+    # link to huurwoningen.nl) rather than the route for this listing.
     for anchor in page.css("a[href]"):
         href = anchor.attrib.get("href", "")
-        if href.startswith("http") and any(p in href for p in EXTERNAL_PLATFORMS):
-            if _registrable_domain(href) != site_domain:
-                return href
+        if not href.startswith("http"):
+            continue
+        if not any(p in href for p in EXTERNAL_PLATFORMS):
+            continue
+        if _registrable_domain(href) == site_domain:
+            continue
+        text = anchor.get_all_text(strip=True) if hasattr(anchor, "get_all_text") else ""
+        if APPLY_INTENT_RE.search(text) or APPLY_INTENT_RE.search(href):
+            return href
     return ""
 
 
