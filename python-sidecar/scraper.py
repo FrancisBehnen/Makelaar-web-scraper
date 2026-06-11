@@ -2008,8 +2008,11 @@ def _fetch_with_timeout(url: str) -> object:
         # Playwright/Camoufox sometimes wedges the browser; once that happens
         # every subsequent fetch hangs. Count these alongside timeouts so the
         # self-heal threshold can trip from either symptom.
-        if "Page crashed" in str(exc):
+        exc_str = str(exc)
+        if "Page crashed" in exc_str:
             _record_fetch_failure(url, "page crashed")
+        elif "Target" in exc_str and "closed" in exc_str:
+            _record_fetch_failure(url, "target closed")
         raise
     _consecutive_fetch_failures = 0
     _failed_urls_in_streak.clear()
