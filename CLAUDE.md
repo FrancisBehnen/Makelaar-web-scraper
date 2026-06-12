@@ -2,7 +2,7 @@
 
 ## Python Sidecar (20 sites)
 
-Scrapling-based scraper in `python-sidecar/`. Bypasses Cloudflare via StealthyFetcher, writes to the same SQLite DB as the Bun app, sends its own Telegram notifications. Docker service name: `scraper-sidecar`.
+Scrapling-based scraper in `python-sidecar/`. Catch-all for any site that doesn't expose a realtime-listings JSON feed — routing keys on that, not on Cloudflare. StealthyFetcher handles Cloudflare where present but also runs on plain-HTML sites. Writes to the same SQLite DB as the Bun app. Docker service name: `scraper-sidecar`.
 
 Before adding new sites, read [`python-sidecar/ADDING-SITES.md`](python-sidecar/ADDING-SITES.md) — it covers Scrapling API gotchas, selector development workflow, and deployment steps.
 
