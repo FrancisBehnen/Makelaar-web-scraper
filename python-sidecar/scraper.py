@@ -117,6 +117,7 @@ VESTEDA_SITEMAP_URL = "https://www.vesteda.com/sitemap.xml"
 VESTEDA_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("VESTEDA_MAX_FETCHES_PER_CYCLE", "20")
 )
+VASTGOEDNL_BASE_URL = "https://aanbod.vastgoednederland.nl/huurwoningen"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -1957,6 +1958,86 @@ def scrape_vesteda_via_sitemap(existing_urls: set[str]) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Vastgoed Nederland via plain HTTP
+# ---------------------------------------------------------------------------
+# Listing pages are server-side rendered; no JS needed. We fetch per
+# Delft-area city via the ?q= filter to avoid scanning all 990+ national
+# listings. Both /huurwoningen/ and /nieuwbouw/ rental cards appear together
+# on the huurwoningen search results page.
+
+def scrape_vastgoednl_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    houses: list[dict[str, str]] = []
+
+    for city in sorted(DELFT_AREA_CITIES):
+        city_q = city.replace(" ", "+")
+        url = f"{VASTGOEDNL_BASE_URL}?q={city_q}"
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Vastgoed Nederland: fetch failed for %s: %s", city, exc)
+            continue
+
+        try:
+            page = Adaptor(body.decode("utf-8", errors="replace"), url=url)
+        except Exception as exc:
+            log.warning("Vastgoed Nederland: parse failed for %s: %s", city, exc)
+            continue
+
+        cards = page.css("a.propertyLink")
+        log.info("Vastgoed Nederland: %d listings for %s", len(cards), city)
+
+        for card in cards:
+            try:
+                href = card.attrib.get("href", "")
+                if not href:
+                    continue
+                listing_url = make_absolute(href, VASTGOEDNL_BASE_URL)
+                if listing_url in seen:
+                    continue
+                seen.add(listing_url)
+
+                street = _first_text(card, "span.street")
+                city_text = (_first_text(card, "span.city") or city).strip()
+
+                if city_text and not is_delft_area(city_text):
+                    continue
+
+                price = _first_text(card, "span.price")
+                price_val = parse_price_euros(price)
+                if price_val and price_val > MAX_PRICE:
+                    continue
+
+                area = ""
+                rooms = ""
+                for li in card.css("figcaption ul li"):
+                    if li.css("span.icon-meter"):
+                        txt = (li.get_all_text() or "").strip()
+                        m = re.search(r"(\d+)\s*m", txt)
+                        if m:
+                            area = m.group(1) + " m²"
+                    elif li.css("span.icon-bed"):
+                        rooms = (li.get_all_text() or "").strip()
+
+                houses.append(
+                    {
+                        "url": listing_url,
+                        "straatnaamHuisnummer": street or "Onbekend",
+                        "plaats": city_text,
+                        "vraagprijs": price,
+                        "oppervlakte": area,
+                        "kamers": rooms,
+                    }
+                )
+            except Exception as exc:
+                log.warning(
+                    "Vastgoed Nederland: failed to parse listing: %s", exc
+                )
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1987,6 +2068,7 @@ CUSTOM_SITES = [
     ("Rent a Room Delft", scrape_rentaroom_via_sitemap),
     ("PSG Wonen", scrape_psgwonen_via_sitemap),
     ("Vesteda", scrape_vesteda_via_sitemap),
+    ("Vastgoed Nederland", scrape_vastgoednl_via_http),
 ]
 
 
