@@ -118,6 +118,7 @@ VESTEDA_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("VESTEDA_MAX_FETCHES_PER_CYCLE", "20")
 )
 VASTGOEDNL_BASE_URL = "https://aanbod.vastgoednederland.nl/huurwoningen"
+STEDELINK_URL = "https://huuraanbod.stedelink.nl/huuraanbod"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -2038,6 +2039,79 @@ def scrape_vastgoednl_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Stedelink via plain HTTP
+# ---------------------------------------------------------------------------
+# huuraanbod.stedelink.nl is a Nuxt SSR app — all listing data is rendered
+# server-side into the initial HTML, so no browser / JS needed.
+
+def scrape_stedelink_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    BASE = "https://huuraanbod.stedelink.nl"
+    try:
+        body = _http_get(STEDELINK_URL)
+    except Exception as exc:
+        log.warning("Stedelink: fetch failed: %s", exc)
+        return []
+
+    try:
+        page = Adaptor(body.decode("utf-8", errors="replace"), url=STEDELINK_URL)
+    except Exception as exc:
+        log.warning("Stedelink: parse failed: %s", exc)
+        return []
+
+    houses: list[dict[str, str]] = []
+    cards = page.css(".property")
+    log.info("Stedelink: %d listing elements found", len(cards))
+
+    for card in cards:
+        try:
+            link_el = card.css("a.btn--secondary")
+            if not link_el:
+                continue
+            href = link_el[0].attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, BASE)
+            if url in existing_urls:
+                continue
+
+            address = _first_text(card, ".property__title")
+            if not address:
+                continue
+
+            city_el = card.css(".property__location .capitalize")
+            city = (city_el[0].get_all_text() or "").strip() if city_el else ""
+
+            if city and not is_delft_area(city):
+                continue
+
+            price_els = card.css(".property__price .highlighted")
+            price = (price_els[0].get_all_text() or "").strip() if price_els else ""
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            rooms_el = card.css(".property__details__rooms span")
+            rooms = (rooms_el[0].get_all_text() or "").strip() if rooms_el else ""
+
+            size_el = card.css(".property__details__size span")
+            area = (size_el[0].get_all_text() or "").strip() if size_el else ""
+
+            houses.append({
+                "url": url,
+                "straatnaamHuisnummer": address,
+                "plaats": city or "Delft",
+                "vraagprijs": price,
+                "oppervlakte": area,
+                "kamers": rooms,
+            })
+        except Exception as exc:
+            log.warning("Stedelink: failed to parse a listing: %s", exc)
+
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -2069,6 +2143,7 @@ CUSTOM_SITES = [
     ("PSG Wonen", scrape_psgwonen_via_sitemap),
     ("Vesteda", scrape_vesteda_via_sitemap),
     ("Vastgoed Nederland", scrape_vastgoednl_via_http),
+    ("Stedelink", scrape_stedelink_via_http),
 ]
 
 
