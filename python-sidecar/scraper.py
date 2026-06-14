@@ -1994,7 +1994,7 @@ def scrape_vastgoednl_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
                 if not href:
                     continue
                 listing_url = make_absolute(href, VASTGOEDNL_BASE_URL)
-                if listing_url in seen:
+                if listing_url in seen or listing_url in existing_urls:
                     continue
                 seen.add(listing_url)
 
