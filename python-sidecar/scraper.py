@@ -2147,6 +2147,11 @@ CUSTOM_SITES = [
 ]
 
 
+def _is_browser_crash(exc: BaseException) -> bool:
+    s = str(exc)
+    return ("Page crashed" in s) or ("Target" in s and "closed" in s)
+
+
 def _fetch_with_timeout(url: str) -> object:
     global _consecutive_fetch_failures
     future = _fetch_pool.submit(
@@ -2220,15 +2225,20 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
         log.info("Fetching %s page %d ...", name, page_num)
         try:
             page = _fetch_with_timeout(url)
-        except TimeoutError:
-            log.warning("%s page %d timed out, retrying once ...", name, page_num)
+        except Exception as first_exc:
+            if not (isinstance(first_exc, TimeoutError) or _is_browser_crash(first_exc)):
+                raise
+            label = "timed out" if isinstance(first_exc, TimeoutError) else "browser crash"
+            log.warning("%s page %d %s, retrying once ...", name, page_num, label)
             try:
                 page = _fetch_with_timeout(url)
-            except TimeoutError:
-                log.warning("%s page %d timed out after %ds, skipping", name, page_num, FETCH_TIMEOUT)
+            except Exception as retry_exc:
+                if not (isinstance(retry_exc, TimeoutError) or _is_browser_crash(retry_exc)):
+                    raise
+                log.warning("%s page %d failed twice (%s), skipping", name, page_num, label)
                 send_throttled_timeout_alert(
                     f"{name}#page{page_num}",
-                    f"⚠️ <b>{name}</b> page {page_num} timed out after {FETCH_TIMEOUT}s — skipped",
+                    f"⚠️ <b>{name}</b> page {page_num} failed ({label}) — skipped",
                 )
                 break
         page_houses = parser(page)
@@ -2278,8 +2288,11 @@ def run_cycle():
                 log.info("Fetching %s ...", name)
                 try:
                     page = _fetch_with_timeout(url)
-                except TimeoutError:
-                    log.warning("%s timed out, retrying once ...", name)
+                except Exception as exc:
+                    if not (isinstance(exc, TimeoutError) or _is_browser_crash(exc)):
+                        raise
+                    label = "timed out" if isinstance(exc, TimeoutError) else "browser crash"
+                    log.warning("%s %s, retrying once ...", name, label)
                     page = _fetch_with_timeout(url)
                 all_houses = parser(page)
                 houses = [h for h in all_houses if h["url"] not in existing_urls]
