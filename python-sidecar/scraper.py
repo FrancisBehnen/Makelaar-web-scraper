@@ -119,6 +119,14 @@ VESTEDA_MAX_FETCHES_PER_CYCLE = int(
 )
 VASTGOEDNL_BASE_URL = "https://aanbod.vastgoednederland.nl/huurwoningen"
 STEDELINK_URL = "https://huuraanbod.stedelink.nl/huuraanbod"
+# Woonzeker is a Nuxt SSR app — listing detail pages are fully server-rendered
+# so no browser is needed. The properties sitemap lists all rental URLs.
+WOONZEKER_SITEMAP_URL = (
+    "https://woonzeker.com/__sitemap__/properties-0.xml"
+)
+WOONZEKER_MAX_FETCHES_PER_CYCLE = int(
+    os.environ.get("WOONZEKER_MAX_FETCHES_PER_CYCLE", "20")
+)
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -2112,6 +2120,140 @@ def scrape_stedelink_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Woonzeker via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Woonzeker (Den Haag area makelaar) runs on a Nuxt SSR stack. Listing detail
+# pages are fully server-rendered and carry JSON-LD (RealEstateListing) with
+# the canonical street address and city, plus an HTML characteristics table
+# with price / area / room count. No browser needed.
+
+def _parse_woonzeker_listing(url: str, body: bytes) -> dict[str, str] | None:
+    a = Adaptor(content=body, url=url)
+
+    # City and street from JSON-LD — most reliable, no selector brittleness.
+    city = ""
+    address = ""
+    for script in a.css('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(script.text or script.get_all_text() or "{}")
+            loc = data.get("contentLocation", {}).get("address", {})
+            city = loc.get("addressLocality", "").strip()
+            address = loc.get("streetAddress", "").strip()
+            if city or address:
+                break
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    if city and not is_delft_area(city):
+        return None
+
+    # Characteristics table: label/value span pairs.
+    fields: dict[str, str] = {}
+    labels = a.css(".property-characteristics__label")
+    values = a.css(".property-characteristics__value")
+    for lbl, val in zip(labels, values):
+        key = (lbl.text or lbl.get_all_text() or "").strip().lower()
+        v = (val.text or val.get_all_text() or "").strip()
+        if key:
+            fields[key] = v
+
+    # Price: prefer the "prijs" characteristic; fall back to the CTA element.
+    price = ""
+    for key in fields:
+        if key.startswith("prijs"):
+            price = fields[key]
+            break
+    if not price:
+        cta_els = a.css(".offer-cta__info-price")
+        if cta_els:
+            price = (cta_els[0].text or "").strip()
+
+    price_val = parse_price_euros(price)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    area = fields.get("woonoppervlakte", "")
+    rooms_raw = fields.get("aantal kamers", "")
+    rooms = ""
+    if rooms_raw.isdigit():
+        n = rooms_raw
+        rooms = "1 kamer" if n == "1" else f"{n} kamers"
+    elif rooms_raw:
+        rooms = rooms_raw
+
+    if not address:
+        return None
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address,
+        "plaats": city or "Onbekend",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_woonzeker_via_sitemap(
+    existing_urls: set[str],
+) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(WOONZEKER_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Woonzeker: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Woonzeker: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Woonzeker: sitemap has %d total URLs", len(all_urls))
+
+    # Only rental listing detail pages (not the index or /aanbod/bedrijfsruimtes).
+    candidates = [
+        u for u in all_urls
+        if "/huur/woningen/" in u and u.rstrip("/") != "https://woonzeker.com/huur/woningen"
+    ]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Woonzeker: %d rental listing URL(s), %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    if len(new_candidates) > WOONZEKER_MAX_FETCHES_PER_CYCLE:
+        log.info(
+            "Woonzeker: capping detail fetches at %d this cycle",
+            WOONZEKER_MAX_FETCHES_PER_CYCLE,
+        )
+        new_candidates = new_candidates[:WOONZEKER_MAX_FETCHES_PER_CYCLE]
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Woonzeker: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_woonzeker_listing(url, body)
+        except Exception as exc:
+            log.warning("Woonzeker: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Woonzeker: %d new rental match(es) in Delft area", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -2144,6 +2286,7 @@ CUSTOM_SITES = [
     ("Vesteda", scrape_vesteda_via_sitemap),
     ("Vastgoed Nederland", scrape_vastgoednl_via_http),
     ("Stedelink", scrape_stedelink_via_http),
+    ("Woonzeker", scrape_woonzeker_via_sitemap),
 ]
 
 
