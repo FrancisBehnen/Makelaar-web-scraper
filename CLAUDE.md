@@ -39,6 +39,10 @@ ssh hostinger 'sudo docker ps'
 ssh hostinger 'sudo docker logs --tail 50 <container-name>'
 ```
 
+## Checking a Makelaar's Live Feed
+
+To verify whether a listing appears in a site's JSON feed, use the `WebFetch` tool to directly fetch the feed URL (e.g. `https://www.verra.nl/nl/realtime-listings/consumer`) — no workflow needed. For HTML-only sites scraped by the python sidecar, fetch the listing page directly the same way.
+
 ## Cloud Maintenance (Claude Code Web/Mobile)
 
 When running in the cloud (claude.ai/code), direct SSH is unavailable due to sandbox
