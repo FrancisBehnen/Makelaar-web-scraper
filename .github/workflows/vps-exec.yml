@@ -131,20 +131,25 @@ jobs:
                 print("Database not found at " + db); sys.exit(1)
             c = sqlite3.connect(db)
             total = c.execute("SELECT COUNT(*) FROM houses").fetchone()[0]
-            today = c.execute("SELECT COUNT(*) FROM houses WHERE created_at >= date('now')").fetchone()[0]
-            week  = c.execute("SELECT COUNT(*) FROM houses WHERE created_at >= date('now','-7 days')").fetchone()[0]
+            resp = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='responses'").fetchone()
             print("=== Database Stats ===")
-            print(str(total) + " total listings")
-            print(str(today) + " listings added today")
-            print(str(week) + " listings added this week")
+            print(str(total) + " total listings in houses table")
+            if resp:
+                notified = c.execute("SELECT COUNT(*) FROM responses WHERE status != 'seeded'").fetchone()[0]
+                print(str(notified) + " listings notified via responder")
             print()
             print("=== Last 10 Listings ===")
-            rows = c.execute("SELECT straatnaamHuisnummer, plaats, vraagprijs, created_at FROM houses ORDER BY created_at DESC LIMIT 10").fetchall()
+            rows = c.execute("SELECT straatnaamHuisnummer, plaats, vraagprijs, url FROM houses ORDER BY rowid DESC LIMIT 10").fetchall()
             if rows:
-                print("{:<35} {:<15} {:<12} {}".format("Address", "City", "Price", "Created"))
+                print("{:<35} {:<15} {:<12} {}".format("Address", "City", "Price", "URL"))
                 print("-"*80)
                 for r in rows:
-                    print("{:<35} {:<15} {:<12} {}".format(r[0] or "", r[1] or "", r[2] or "", r[3]))
+                    url = (r[3] or "")
+                    if len(url) > 40:
+                        url = url[:40] + "..."
+                    print("{:<35} {:<15} {:<12} {}".format(r[0] or "", r[1] or "", r[2] or "", url))
+            else:
+                print("(no listings)")
             c.close()
             PYEOF
                 ;;
