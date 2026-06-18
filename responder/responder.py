@@ -18,6 +18,7 @@ import queue
 import re
 import threading
 import time
+from urllib.parse import urlparse
 
 import config
 import db
@@ -46,6 +47,7 @@ STATUS_EMOJI = {
     "manual": "✍️",
     "cancelled": "❌",
     "failed": "⚠️",
+    "duplicate": "🔁",
 }
 
 # Browser work (form fill/submit) runs on a single worker so only one
@@ -122,9 +124,35 @@ def _refresh_notification(
 # ---------------------------------------------------------------------------
 
 
+def _notify_duplicate(house, prior) -> None:
+    adres = house["straatnaamHuisnummer"]
+    new_domain = urlparse(house["url"]).netloc.replace("www.", "")
+    prior_domain = urlparse(prior["url"]).netloc.replace("www.", "")
+    text = (
+        f"🔁 <b>{esc(adres)}</b> staat nu ook op <code>{esc(new_domain)}</code> "
+        f"— al eerder gezien via {esc(prior_domain)}.\n"
+        f"Prijs: {esc(house['vraagprijs'])} · {esc(house['url'])}"
+    )
+    prior_msg_ids: dict = json.loads(prior["tg_message_ids"] or "{}")
+    if prior_msg_ids:
+        for chat_id, message_id in prior_msg_ids.items():
+            tg.send_message(chat_id, text, reply_to=message_id)
+    else:
+        tg.broadcast(text)
+    db.create_response(house["url"], "duplicate")
+    log.info(
+        "Duplicate listing %s (%s) — already seen via %s (response %d)",
+        adres, new_domain, prior_domain, prior["id"],
+    )
+
+
 def _process_new_listing(url: str) -> None:
     house = db.get_house(url)
     if house is None:
+        return
+    prior = db.find_prior_response(url)
+    if prior is not None:
+        _notify_duplicate(house, prior)
         return
     response_id = db.create_response(url, "detecting")
     try:
