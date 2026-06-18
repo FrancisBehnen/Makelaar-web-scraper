@@ -125,7 +125,7 @@ jobs:
 
               scraper-db-stats)
                 DB=$(sudo docker inspect scraper-sidecar --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
-                if [ -n "$DB" ] && [ -f "$DB/db.sqlite" ]; then
+                if [ -n "$DB" ] && sudo test -f "$DB/db.sqlite"; then
                   echo "=== Database Stats ==="
                   sudo sqlite3 "$DB/db.sqlite" "SELECT COUNT(*) || ' total listings' FROM houses;"
                   sudo sqlite3 "$DB/db.sqlite" "SELECT COUNT(*) || ' listings added today' FROM houses WHERE created_at >= date('now');"
