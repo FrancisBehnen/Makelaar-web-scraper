@@ -124,65 +124,65 @@ jobs:
                 ;;
 
               scraper-db-stats)
-                sudo docker exec scraper-sidecar python3 -c "
-import sqlite3, os, sys
-db = os.environ.get('DB_PATH', 'data/db.sqlite')
-if not os.path.isfile(db):
-    print(f'Database not found at {db}'); sys.exit(1)
-c = sqlite3.connect(db)
-total = c.execute('SELECT COUNT(*) FROM houses').fetchone()[0]
-today = c.execute(\"SELECT COUNT(*) FROM houses WHERE created_at >= date('now')\").fetchone()[0]
-week  = c.execute(\"SELECT COUNT(*) FROM houses WHERE created_at >= date('now','-7 days')\").fetchone()[0]
-print(f'=== Database Stats ===')
-print(f'{total} total listings')
-print(f'{today} listings added today')
-print(f'{week} listings added this week')
-print()
-print('=== Last 10 Listings ===')
-rows = c.execute('SELECT straatnaamHuisnummer, plaats, vraagprijs, created_at FROM houses ORDER BY created_at DESC LIMIT 10').fetchall()
-if rows:
-    print(f'{\"Address\":<35} {\"City\":<15} {\"Price\":<12} {\"Created\"}')
-    print('-'*80)
-    for r in rows:
-        print(f'{(r[0] or \"\"):<35} {(r[1] or \"\"):<15} {(r[2] or \"\"):<12} {r[3]}')
-c.close()
-"
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import sqlite3, os, sys
+            db = os.environ.get("DB_PATH", "data/db.sqlite")
+            if not os.path.isfile(db):
+                print("Database not found at " + db); sys.exit(1)
+            c = sqlite3.connect(db)
+            total = c.execute("SELECT COUNT(*) FROM houses").fetchone()[0]
+            today = c.execute("SELECT COUNT(*) FROM houses WHERE created_at >= date('now')").fetchone()[0]
+            week  = c.execute("SELECT COUNT(*) FROM houses WHERE created_at >= date('now','-7 days')").fetchone()[0]
+            print("=== Database Stats ===")
+            print(str(total) + " total listings")
+            print(str(today) + " listings added today")
+            print(str(week) + " listings added this week")
+            print()
+            print("=== Last 10 Listings ===")
+            rows = c.execute("SELECT straatnaamHuisnummer, plaats, vraagprijs, created_at FROM houses ORDER BY created_at DESC LIMIT 10").fetchall()
+            if rows:
+                print("{:<35} {:<15} {:<12} {}".format("Address", "City", "Price", "Created"))
+                print("-"*80)
+                for r in rows:
+                    print("{:<35} {:<15} {:<12} {}".format(r[0] or "", r[1] or "", r[2] or "", r[3]))
+            c.close()
+            PYEOF
                 ;;
 
               responder-detection-stats)
-                sudo docker exec scraper-sidecar python3 -c "
-import sqlite3, os, sys
-db = os.environ.get('DB_PATH', 'data/db.sqlite')
-if not os.path.isfile(db):
-    print(f'Database not found at {db}'); sys.exit(1)
-c = sqlite3.connect(db)
-# Check if responses table exists
-has = c.execute(\"SELECT name FROM sqlite_master WHERE type='table' AND name='responses'\").fetchone()
-if not has:
-    print('responses table does not exist yet'); sys.exit(0)
-print('=== Contact method x status (all notified listings) ===')
-for r in c.execute(\"SELECT COALESCE(contact_method,'(none)') AS method, status, COUNT(*) AS n FROM responses WHERE status != 'seeded' GROUP BY method, status ORDER BY method, status\"):
-    print(f'  {r[0]:<15} {r[1]:<12} {r[2]}')
-print()
-print('=== Per site (domain x method) ===')
-for r in c.execute('''
-  WITH d AS (
-    SELECT COALESCE(contact_method,'(none)') AS method, status,
-      CASE WHEN instr(h,'/')>0 THEN substr(h,1,instr(h,'/')-1) ELSE h END AS domain
-    FROM (SELECT contact_method, status,
-            replace(replace(replace(url,'https://',''),'http://',''),'www.','') AS h
-          FROM responses WHERE status != 'seeded')
-  )
-  SELECT domain, method, status, COUNT(*) AS n
-  FROM d GROUP BY domain, method, status ORDER BY domain, method
-'''):
-    print(f'  {r[0]:<35} {r[1]:<15} {r[2]:<12} {r[3]}')
-print()
-print('=== Forms that fell back to manual / failed (with reason) ===')
-for r in c.execute(\"SELECT substr(url,1,55), status, substr(COALESCE(error,''),1,70) FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25\"):
-    print(f'  {r[0]:<55} {r[1]:<8} {r[2]}')
-c.close()
-"
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import sqlite3, os, sys
+            db = os.environ.get("DB_PATH", "data/db.sqlite")
+            if not os.path.isfile(db):
+                print("Database not found at " + db); sys.exit(1)
+            c = sqlite3.connect(db)
+            has = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='responses'").fetchone()
+            if not has:
+                print("responses table does not exist yet"); sys.exit(0)
+            print("=== Contact method x status (all notified listings) ===")
+            for r in c.execute("SELECT COALESCE(contact_method,'(none)') AS method, status, COUNT(*) AS n FROM responses WHERE status != 'seeded' GROUP BY method, status ORDER BY method, status"):
+                print("  {:<15} {:<12} {}".format(r[0], r[1], r[2]))
+            print()
+            print("=== Per site (domain x method) ===")
+            q = """
+              WITH d AS (
+                SELECT COALESCE(contact_method,'(none)') AS method, status,
+                  CASE WHEN instr(h,'/')>0 THEN substr(h,1,instr(h,'/')-1) ELSE h END AS domain
+                FROM (SELECT contact_method, status,
+                        replace(replace(replace(url,'https://',''),'http://',''),'www.','') AS h
+                      FROM responses WHERE status != 'seeded')
+              )
+              SELECT domain, method, status, COUNT(*) AS n
+              FROM d GROUP BY domain, method, status ORDER BY domain, method
+            """
+            for r in c.execute(q):
+                print("  {:<35} {:<15} {:<12} {}".format(r[0], r[1], r[2], r[3]))
+            print()
+            print("=== Forms that fell back to manual / failed (with reason) ===")
+            for r in c.execute("SELECT substr(url,1,55), status, substr(COALESCE(error,''),1,70) FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25"):
+                print("  {:<55} {:<8} {}".format(r[0], r[1], r[2]))
+            c.close()
+            PYEOF
                 ;;
 
               scraper-last-new)
