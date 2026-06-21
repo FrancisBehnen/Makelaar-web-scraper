@@ -2154,6 +2154,20 @@ def _is_browser_crash(exc: BaseException) -> bool:
 
 def _fetch_with_timeout(url: str) -> object:
     global _consecutive_fetch_failures
+    # After a prior failure, probe the pool before queuing another 120s fetch.
+    # The single-worker pool queues behind any stuck task, so every submit
+    # after a wedge is guaranteed to timeout.  A 5s probe detects this and
+    # lets _record_fetch_failure trip the self-restart threshold quickly
+    # (~2 min total instead of ~10 min).
+    if _consecutive_fetch_failures > 0:
+        probe = _fetch_pool.submit(lambda: None)
+        try:
+            probe.result(timeout=5)
+        except TimeoutError:
+            probe.cancel()
+            _record_fetch_failure(url, "timeout (worker stuck)")
+            raise TimeoutError(f"Pool worker stuck — skipping {url}")
+
     future = _fetch_pool.submit(
         StealthyFetcher.fetch,
         url,
@@ -2167,9 +2181,6 @@ def _fetch_with_timeout(url: str) -> object:
         _record_fetch_failure(url, "timeout")
         raise
     except Exception as exc:
-        # Playwright/Camoufox sometimes wedges the browser; once that happens
-        # every subsequent fetch hangs. Count these alongside timeouts so the
-        # self-heal threshold can trip from either symptom.
         exc_str = str(exc)
         if "Page crashed" in exc_str:
             _record_fetch_failure(url, "page crashed")
