@@ -119,6 +119,17 @@ VESTEDA_MAX_FETCHES_PER_CYCLE = int(
 )
 VASTGOEDNL_BASE_URL = "https://aanbod.vastgoednederland.nl/huurwoningen"
 STEDELINK_URL = "https://huuraanbod.stedelink.nl/huuraanbod"
+HUURFLITS_BASE_URL = "https://huurflits.nl"
+# Per-city slugs as used in /huurwoningen/{slug} (multi-word cities URL-encoded).
+_HUURFLITS_CITY_SLUGS = {
+    "Delft": "Delft",
+    "Delfgauw": "Delfgauw",
+    "Den Hoorn": "Den%20Hoorn",
+    "Rijswijk": "Rijswijk",
+    "Schipluiden": "Schipluiden",
+    "Nootdorp": "Nootdorp",
+    "Pijnacker": "Pijnacker",
+}
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -2112,6 +2123,102 @@ def scrape_stedelink_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Huurflits parser (per-city plain HTTP)
+# ---------------------------------------------------------------------------
+# huurflits.nl uses Livewire for lazy-loading but each per-city page renders
+# the 10 most recent listings in static HTML — no browser needed. Prices use
+# Dutch notation ("€ 1.250,00") so the cents suffix must be stripped before
+# calling parse_price_euros.
+
+def scrape_huurflits_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    from urllib.parse import urlparse, unquote
+
+    houses: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for city_label, city_slug in _HUURFLITS_CITY_SLUGS.items():
+        page_url = f"{HUURFLITS_BASE_URL}/huurwoningen/{city_slug}"
+        try:
+            body = _http_get(page_url)
+        except Exception as exc:
+            log.warning("Huurflits: fetch failed for %s: %s", city_label, exc)
+            continue
+
+        try:
+            page = Adaptor(body.decode("utf-8", errors="replace"), url=page_url)
+        except Exception as exc:
+            log.warning("Huurflits: parse failed for %s: %s", city_label, exc)
+            continue
+
+        cards = page.css("div.feat_property")
+        log.info("Huurflits (%s): %d listing cards", city_label, len(cards))
+
+        for card in cards:
+            try:
+                link_els = card.css("div.fp_footer a[href*='/woningen/']")
+                if not link_els:
+                    continue
+                listing_url = link_els[0].attrib.get("href", "")
+                if not listing_url:
+                    continue
+                listing_url = make_absolute(listing_url, HUURFLITS_BASE_URL)
+
+                if listing_url in existing_urls or listing_url in seen:
+                    continue
+                seen.add(listing_url)
+
+                path = urlparse(listing_url).path.split("/")
+                # ['', 'woningen', '{id}', '{city}', '{street}']
+                city = unquote(path[3]) if len(path) > 3 else city_label
+                street = unquote(path[4]) if len(path) > 4 else ""
+
+                if city and not is_delft_area(city):
+                    continue
+
+                price_els = card.css("a.fp_price")
+                price = ""
+                if price_els:
+                    price = (price_els[0].text or "").strip()
+                    if not price:
+                        price = (price_els[0].get_all_text() or "").strip()
+
+                # Strip Dutch cents suffix ("€ 1.250,00" → "€ 1.250") so
+                # parse_price_euros yields euros, not a 100x inflated value.
+                price_clean = re.sub(r",\d{2}.*$", "", price).strip()
+                price_val = parse_price_euros(price_clean)
+                if price_val and price_val > MAX_PRICE:
+                    continue
+
+                area = ""
+                rooms = ""
+                for span in card.css("span.grid_span_prop"):
+                    txt = (span.get_all_text() or "").strip()
+                    if "Kamers:" in txt:
+                        km = re.search(r"Kamers:\s*(\d+)", txt)
+                        if km:
+                            n = km.group(1)
+                            rooms = "1 kamer" if n == "1" else f"{n} kamers"
+                    elif "Oppervlakte:" in txt:
+                        am = re.search(r"Oppervlakte:\s*(\d+)", txt)
+                        if am:
+                            area = f"{am.group(1)} m²"
+
+                houses.append({
+                    "url": listing_url,
+                    "straatnaamHuisnummer": street or "Onbekend",
+                    "plaats": city or city_label,
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                })
+            except Exception as exc:
+                log.warning("Huurflits: failed to parse a listing: %s", exc)
+
+    log.info("Huurflits: %d new listing(s)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -2144,6 +2251,7 @@ CUSTOM_SITES = [
     ("Vesteda", scrape_vesteda_via_sitemap),
     ("Vastgoed Nederland", scrape_vastgoednl_via_http),
     ("Stedelink", scrape_stedelink_via_http),
+    ("Huurflits", scrape_huurflits_via_http),
 ]
 
 
