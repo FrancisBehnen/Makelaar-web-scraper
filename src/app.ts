@@ -5,6 +5,7 @@ import { IHuis } from "./Huis";
 import { IDatabase, SQLiteDatabase } from "./database";
 import domProcessors from "./response-processors";
 import { makelaars } from "./makelaars";
+import { isNonIndependentDwelling } from "./dwellingFilter";
 
 const USE_DEBUG_HTML = false;
 const CHECK_INTERVAL = 1000 * 60 * 5; // 5 minutes
@@ -54,8 +55,11 @@ class App {
       const huizen = await this.scrape(makelaar);
       console.log(`Scraped ${huizen.length} huizen from ${makelaar.name}`);
 
-      // Filter out houses that are already in the database
-      const newHouses = huizen.filter((huis) => !currentHouses.has(huis.url));
+      // Filter out houses that are already in the database, then drop any
+      // non-independent dwellings (rooms / onzelfstandige woonruimte).
+      const newHouses = huizen
+        .filter((huis) => !currentHouses.has(huis.url))
+        .filter((huis) => !isNonIndependentDwelling(huis));
       console.log(`Found ${newHouses.length} new houses`);
 
       // Persist new houses; the responder service watches the DB and
