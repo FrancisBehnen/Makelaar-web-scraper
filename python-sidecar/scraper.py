@@ -172,6 +172,29 @@ def is_delft_area(text: str) -> bool:
     )
 
 
+# A non-independent dwelling ("onzelfstandige woonruimte") is a room with
+# shared kitchen/bathroom — we only notify about self-contained homes. Studios
+# and apartments are self-contained (zelfstandig) and kept. We inspect only the
+# URL slug and the address/title, never the "X kamers" count, so a room count
+# can never trigger a false positive. Street names like "Kamerlingh Onnesweg"
+# are safe: the slug/word-boundary patterns require "kamer" to stand alone.
+_ROOM_URL_RE = re.compile(
+    r"kamer-te-huur|studentenkamer|student-room|room-for-rent"
+    r"|/kamers?(?:/|$)|/rooms?(?:/|$)",
+    re.IGNORECASE,
+)
+_ROOM_TITLE_RE = re.compile(r"\bstudentenkamer\b|\bkamer\b|\broom\b", re.IGNORECASE)
+
+
+def is_non_independent_dwelling(house: dict[str, str]) -> bool:
+    """True for shared-facility rooms (onzelfstandige woonruimte)."""
+    if _ROOM_URL_RE.search(house.get("url", "") or ""):
+        return True
+    if _ROOM_TITLE_RE.search(house.get("straatnaamHuisnummer", "") or ""):
+        return True
+    return False
+
+
 def make_absolute(href: str, base: str) -> str:
     if not href:
         return ""
@@ -2501,10 +2524,16 @@ def _persist_new_houses(conn, name, houses, existing_urls, all_new):
     from there and handles all listing-facing Telegram messaging."""
     if not houses:
         return
-    save_houses(conn, houses)
-    all_new.extend(houses)
-    existing_urls.update(h["url"] for h in houses)
-    log.info("%s: saved %d new listing(s)", name, len(houses))
+    independent = [h for h in houses if not is_non_independent_dwelling(h)]
+    dropped = len(houses) - len(independent)
+    if dropped:
+        log.info("%s: filtered out %d non-independent dwelling(s)", name, dropped)
+    if not independent:
+        return
+    save_houses(conn, independent)
+    all_new.extend(independent)
+    existing_urls.update(h["url"] for h in independent)
+    log.info("%s: saved %d new listing(s)", name, len(independent))
 
 
 def run_cycle():
