@@ -27,6 +27,7 @@ on:
           - debug-huurstunt-locked
           - debug-huurstunt-login
           - debug-huurstunt-cookie
+          - debug-scrapling-sig
           - sidecar-reload-env
           - watchtower-logs
           - system-disk
@@ -371,6 +372,20 @@ jobs:
                 sudo docker compose up -d scraper-sidecar
                 sleep 10
                 sudo docker exec scraper-sidecar sh -c 'echo "HUURSTUNT_COOKIE present in container: $([ -n "$HUURSTUNT_COOKIE" ] && echo yes || echo no) (len ${#HUURSTUNT_COOKIE})"'
+                ;;
+
+              debug-scrapling-sig)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import inspect, scrapling
+            from scrapling.fetchers import StealthyFetcher
+            print("scrapling version:", getattr(scrapling, "__version__", "?"))
+            sig = inspect.signature(StealthyFetcher.fetch)
+            print("StealthyFetcher.fetch params:")
+            for name, p in sig.parameters.items():
+                print("  ", name, "=", p.default if p.default is not inspect._empty else "<required>")
+            for key in ("cookies", "extra_headers"):
+                print("HAS", key, ":", key in sig.parameters)
+            PYEOF
                 ;;
 
               watchtower-logs)
