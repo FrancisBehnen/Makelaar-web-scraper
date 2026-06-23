@@ -130,6 +130,18 @@ _HUURFLITS_CITY_SLUGS = {
     "Nootdorp": "Nootdorp",
     "Pijnacker": "Pijnacker",
 }
+HUURSTUNT_BASE_URL = "https://www.huurstunt.nl"
+# City search slugs for /huren/{slug}. Rijswijk requires the province suffix
+# (-zh) to resolve correctly; Den Hoorn has no dedicated slug and is small
+# enough that it is covered by the Delft search results.
+_HUURSTUNT_SEARCH_SLUGS = {
+    "Delft": "delft",
+    "Rijswijk": "rijswijk-zh",
+    "Pijnacker": "pijnacker",
+    "Nootdorp": "nootdorp",
+    "Delfgauw": "delfgauw",
+    "Schipluiden": "schipluiden",
+}
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -2219,6 +2231,107 @@ def scrape_huurflits_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Huurstunt parser (per-city plain HTTP)
+# ---------------------------------------------------------------------------
+# huurstunt.nl is a national aggregator. Listing cards are SSR'd in the
+# initial HTML response — no JS execution needed. Listings from radius-based
+# city searches (Rijswijk +2km, Pijnacker/Nootdorp +5km) include nearby cities
+# like Den Haag; is_delft_area() on the URL-embedded city slug filters these
+# out. Den Hoorn has no dedicated slug and is covered by the Delft results.
+
+def scrape_huurstunt_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    from urllib.parse import urlparse, unquote
+
+    houses: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for city_label, slug in _HUURSTUNT_SEARCH_SLUGS.items():
+        page_url = f"{HUURSTUNT_BASE_URL}/huren/{slug}"
+        try:
+            body = _http_get(page_url)
+        except Exception as exc:
+            log.warning("Huurstunt: fetch failed for %s: %s", city_label, exc)
+            continue
+
+        try:
+            page = Adaptor(body.decode("utf-8", errors="replace"), url=page_url)
+        except Exception as exc:
+            log.warning("Huurstunt: parse failed for %s: %s", city_label, exc)
+            continue
+
+        # Real listing cards have data-loading; z-10 skeleton placeholders don't.
+        cards = page.css("article[data-loading]")
+        log.info("Huurstunt (%s): %d listing cards", city_label, len(cards))
+
+        for card in cards:
+            try:
+                link_els = card.css('a[href*="/huren/in/"]')
+                if not link_els:
+                    continue
+                href = link_els[0].attrib.get("href", "")
+                if not href:
+                    continue
+                listing_url = make_absolute(href, HUURSTUNT_BASE_URL)
+
+                if listing_url in existing_urls or listing_url in seen:
+                    continue
+                seen.add(listing_url)
+
+                # City from URL path: /{type}/huren/in/{city-slug}/{street}/{id}
+                path_parts = urlparse(listing_url).path.split("/")
+                city_slug = path_parts[4] if len(path_parts) > 4 else ""
+                city = unquote(city_slug).replace("-", " ").strip().title()
+
+                if city and not is_delft_area(city):
+                    continue
+
+                address = ""
+                h3_els = card.css("h3")
+                if h3_els:
+                    address = (h3_els[0].get_all_text() or "").strip()
+
+                m2 = ""
+                rooms = ""
+                for li in card.css("ul li"):
+                    spans = li.css("span")
+                    if not spans:
+                        continue
+                    val = (spans[-1].text or spans[-1].get_all_text() or "").strip()
+                    if re.search(r"\d+\s*m[2²]", val):
+                        m2_m = re.search(r"(\d+)\s*m[2²]", val)
+                        if m2_m:
+                            m2 = f"{m2_m.group(1)} m²"
+                    elif "kamer" in val.lower():
+                        rooms = val
+
+                price = ""
+                price_els = card.css("footer p")
+                if price_els:
+                    raw = (price_els[0].get_all_text() or "").strip()
+                    price_m = re.search(r"€\s*[\d.,]+", raw)
+                    if price_m:
+                        price = price_m.group(0).strip()
+
+                price_val = parse_price_euros(price)
+                if price_val and price_val > MAX_PRICE:
+                    continue
+
+                houses.append({
+                    "url": listing_url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or city_label,
+                    "vraagprijs": price,
+                    "oppervlakte": m2,
+                    "kamers": rooms,
+                })
+            except Exception as exc:
+                log.warning("Huurstunt: failed to parse a listing: %s", exc)
+
+    log.info("Huurstunt: %d new listing(s)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -2252,6 +2365,7 @@ CUSTOM_SITES = [
     ("Vastgoed Nederland", scrape_vastgoednl_via_http),
     ("Stedelink", scrape_stedelink_via_http),
     ("Huurflits", scrape_huurflits_via_http),
+    ("Huurstunt", scrape_huurstunt_via_http),
 ]
 
 
