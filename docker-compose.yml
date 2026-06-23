@@ -36,6 +36,7 @@ services:
       - CONTACT_PHONE=${CONTACT_PHONE}
       - GH_TOKEN=${GH_TOKEN:-}
       - GH_REPO=${GH_REPO:-FrancisBehnen/Makelaar-web-scraper}
+      - HUURSTUNT_COOKIE=${HUURSTUNT_COOKIE:-}
       - POLL_INTERVAL=30
       - FETCH_TIMEOUT=120
     volumes:

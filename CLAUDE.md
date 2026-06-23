@@ -6,11 +6,13 @@ Scrapling-based scraper in `python-sidecar/`. Catch-all for any site that doesn'
 
 Before adding new sites, read [`python-sidecar/ADDING-SITES.md`](python-sidecar/ADDING-SITES.md) — it covers Scrapling API gotchas, selector development workflow, and deployment steps.
 
+**Huurstunt login wall**: Huurstunt hides some listings behind an email magic-link login (no password, plus reCAPTCHA — can't be automated headlessly). Anonymous locked cards link to `/aanmelden?huis=…` instead of `/huren/in/…` and only leak street+city. Set the optional `HUURSTUNT_COOKIE` env var (a logged-in browser's raw `Cookie:` header) to unlock them; the sidecar sends it on huurstunt requests and warns when the session expires (cards re-lock). The responder uses the same cookie (scoped to huurstunt only) so contact-route detection works on the now-unlocked detail pages.
+
 ## Responder
 
 Python service in `responder/`. Docker service name: `scraper-responder`. Watches the shared SQLite DB for new listings and owns all listing Telegram notifications (letter behind a `📋 Brief` inline button) — the scrapers no longer send listing messages. Detects the contact route per makelaar (email / contact form / external); for forms it fills them in a headless browser and asks for approval via a screenshot with ✅/❌ buttons before submitting.
 
-Key env vars: `DB_PATH`, `DATA_DIR`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, `TELEGRAM_ALERT_CHAT_IDS` (optional), `CONTACT_NAME`, `CONTACT_EMAIL`, `CONTACT_PHONE`, `GH_TOKEN` (optional), `GH_REPO`, `POLL_INTERVAL` (default 30), `FETCH_TIMEOUT` (default 120).
+Key env vars: `DB_PATH`, `DATA_DIR`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, `TELEGRAM_ALERT_CHAT_IDS` (optional), `CONTACT_NAME`, `CONTACT_EMAIL`, `CONTACT_PHONE`, `GH_TOKEN` (optional), `GH_REPO`, `HUURSTUNT_COOKIE` (optional, see above), `POLL_INTERVAL` (default 30), `FETCH_TIMEOUT` (default 120).
 
 **Add-site flow**: sending a listing URL from an unsupported site to the Telegram bot makes the responder open a GitHub issue `Add site: {domain}` (label `add-site`). The `claude-add-site.yml` workflow then runs Claude Code to add the parser per `ADDING-SITES.md` and open a PR, commenting on the issue. Requires repo secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`).
 

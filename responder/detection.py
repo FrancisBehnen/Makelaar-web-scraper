@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlparse
 
 from scrapling.fetchers import StealthyFetcher
 
-from config import BROWSER_LOCK, FETCH_TIMEOUT
+from config import BROWSER_LOCK, FETCH_TIMEOUT, HUURSTUNT_COOKIE
 
 log = logging.getLogger("responder")
 
@@ -25,6 +25,30 @@ class _SuppressBenignCF(logging.Filter):
         return "No Cloudflare challenge found" not in record.getMessage()
 
 logging.getLogger("scrapling").addFilter(_SuppressBenignCF())
+
+
+def _parse_cookie_header(raw: str, domain: str) -> list[dict]:
+    """Turn a raw `Cookie:` header ("a=b; c=d") into Playwright cookie dicts."""
+    cookies = []
+    for part in raw.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        cookies.append({
+            "name": name.strip(),
+            "value": value.strip(),
+            "domain": domain,
+            "path": "/",
+        })
+    return cookies
+
+
+# Parsed once. Sent only for huurstunt.nl requests so the session cookie never
+# leaks to other makelaars' sites.
+_HUURSTUNT_COOKIES = (
+    _parse_cookie_header(HUURSTUNT_COOKIE, ".huurstunt.nl") if HUURSTUNT_COOKIE else []
+)
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Addresses that are clearly not a makelaar inbox.
@@ -85,14 +109,11 @@ class ContactInfo:
 
 
 def _fetch(url: str):
+    kwargs = dict(headless=True, solve_cloudflare=True, network_idle=True)
+    if _HUURSTUNT_COOKIES and _registrable_domain(url) == "huurstunt.nl":
+        kwargs["cookies"] = _HUURSTUNT_COOKIES
     with BROWSER_LOCK:
-        future = _fetch_pool.submit(
-            StealthyFetcher.fetch,
-            url,
-            headless=True,
-            solve_cloudflare=True,
-            network_idle=True,
-        )
+        future = _fetch_pool.submit(StealthyFetcher.fetch, url, **kwargs)
         try:
             return future.result(timeout=FETCH_TIMEOUT)
         except Exception as exc:

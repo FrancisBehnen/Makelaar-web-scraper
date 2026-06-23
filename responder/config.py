@@ -30,6 +30,12 @@ CONTACT_PHONE = os.environ.get("CONTACT_PHONE", "")
 GH_TOKEN = os.environ.get("GH_TOKEN", "")
 GH_REPO = os.environ.get("GH_REPO", "FrancisBehnen/Makelaar-web-scraper")
 
+# Optional logged-in session cookie for Huurstunt (raw `Cookie:` header value,
+# e.g. "a=b; c=d"). Huurstunt gates listing detail behind an email magic-link
+# login, so detection of the contact route needs the same session the scraper
+# used to discover the listing. Re-capture from a browser when it expires.
+HUURSTUNT_COOKIE = os.environ.get("HUURSTUNT_COOKIE", "").strip()
+
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
 
