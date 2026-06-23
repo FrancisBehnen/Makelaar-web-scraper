@@ -17,6 +17,7 @@ services:
       - DB_PATH=data/db.sqlite
       - CHECK_INTERVAL=300
       - DEBUG_DUMP=false
+      - HUURSTUNT_COOKIE=${HUURSTUNT_COOKIE:-}
     volumes:
       - scraper-data:/app/data
 

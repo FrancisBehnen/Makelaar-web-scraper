@@ -26,6 +26,8 @@ on:
           - responder-detection-stats
           - debug-huurstunt-locked
           - debug-huurstunt-login
+          - debug-huurstunt-cookie
+          - sidecar-reload-env
           - watchtower-logs
           - system-disk
           - system-memory
@@ -323,6 +325,52 @@ jobs:
                     if i != -1:
                         print("   kw[%s]: ...%s..." % (kw, txt[max(0,i-40):i+60].replace(chr(10)," ").strip()))
             PYEOF
+                ;;
+
+              debug-huurstunt-cookie)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import os, urllib.request, scraper
+            cookie = os.environ.get("HUURSTUNT_COOKIE", "").strip()
+            print("HUURSTUNT_COOKIE present:", bool(cookie), "| length:", len(cookie))
+            def fetch(u, ck):
+                h = {"User-Agent": scraper._PLAIN_HTTP_UA}
+                if ck:
+                    h["Cookie"] = ck
+                return urllib.request.urlopen(urllib.request.Request(u, headers=h), timeout=30).read()
+            url = "https://www.huurstunt.nl/huren/delft"
+            for label, ck in (("ANON", None), ("WITH-COOKIE", cookie or None)):
+                if ck is None and label == "WITH-COOKIE":
+                    print("\n[WITH-COOKIE] skipped — no cookie set in container env"); continue
+                try:
+                    body = fetch(url, ck)
+                except Exception as e:
+                    print("\n[%s] fetch err: %r" % (label, e)); continue
+                page = scraper.Adaptor(body.decode("utf-8", "replace"), url=url)
+                cards = page.css("article[data-loading]")
+                openc = [c for c in cards if c.css("a[href*='/huren/in/']")]
+                locked = [c for c in cards if c.css("a[href*='/aanmelden']") and not c.css("a[href*='/huren/in/']")]
+                print("\n[%s] bytes=%d cards=%d open=%d locked=%d" % (label, len(body), len(cards), len(openc), len(locked)))
+                if openc:
+                    c = openc[0]
+                    h3 = c.css("h3")
+                    addr = (h3[0].get_all_text().strip() if h3 else "")
+                    foot = c.css("footer p")
+                    price = (foot[0].get_all_text().strip() if foot else "")
+                    print("   sample open card: addr=%r price=%r" % (addr[:50], price[:30]))
+            PYEOF
+                ;;
+
+              sidecar-reload-env)
+                COMPOSE=$(ls /docker/makelaar/docker-compose.yml /docker/makelaar-scraper/docker-compose.yml 2>/dev/null | head -1)
+                if [ -z "$COMPOSE" ]; then
+                  COMPOSE=$(find /docker -name "docker-compose.yml" -path "*makelaar*" 2>/dev/null | head -1)
+                fi
+                if [ -z "$COMPOSE" ]; then echo "Compose file not found"; exit 1; fi
+                echo "Using compose file: $COMPOSE"
+                cd "$(dirname "$COMPOSE")"
+                sudo docker compose up -d scraper-sidecar
+                sleep 10
+                sudo docker exec scraper-sidecar sh -c 'echo "HUURSTUNT_COOKIE present in container: $([ -n "$HUURSTUNT_COOKIE" ] && echo yes || echo no) (len ${#HUURSTUNT_COOKIE})"'
                 ;;
 
               watchtower-logs)
