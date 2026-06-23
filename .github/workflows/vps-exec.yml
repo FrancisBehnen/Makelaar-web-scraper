@@ -25,6 +25,7 @@ on:
           - scraper-last-new
           - responder-detection-stats
           - debug-huurstunt-locked
+          - debug-huurstunt-login
           - watchtower-logs
           - system-disk
           - system-memory
@@ -292,6 +293,35 @@ jobs:
                     print(a.html_content[:4000])
                 except Exception as e:
                     print("html err:", e)
+            PYEOF
+                ;;
+
+              debug-huurstunt-login)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import scraper
+            for url in ("https://www.huurstunt.nl/inloggen", "https://www.huurstunt.nl/aanmelden", "https://www.huurstunt.nl/aanmelden?huis=f0cs6"):
+                print("\n############ " + url + " ############")
+                try:
+                    body = scraper._http_get(url)
+                except Exception as e:
+                    print("fetch err:", repr(e)); continue
+                print("bytes:", len(body))
+                page = scraper.Adaptor(body.decode("utf-8", "replace"), url=url)
+                forms = page.css("form")
+                print("forms:", len(forms))
+                for fi, f in enumerate(forms):
+                    print("--- form", fi, "action=", f.attrib.get("action"), "method=", f.attrib.get("method"), "---")
+                    for inp in f.css("input"):
+                        at = dict(inp.attrib)
+                        print("   input name=", at.get("name"), "type=", at.get("type"), "value=", (at.get("value") or "")[:40])
+                    for btn in f.css("button"):
+                        print("   button:", (btn.get_all_text() or "").strip()[:50], "type=", btn.attrib.get("type"))
+                # surface any wording about password vs magic link / email-only
+                txt = (page.get_all_text() or "")
+                for kw in ("wachtwoord", "magic", "e-mail", "email", "verificatie", "inloglink", "link", "code"):
+                    i = txt.lower().find(kw)
+                    if i != -1:
+                        print("   kw[%s]: ...%s..." % (kw, txt[max(0,i-40):i+60].replace(chr(10)," ").strip()))
             PYEOF
                 ;;
 
