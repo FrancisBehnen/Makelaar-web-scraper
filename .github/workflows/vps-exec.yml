@@ -379,12 +379,24 @@ jobs:
             import inspect, scrapling
             from scrapling.fetchers import StealthyFetcher
             print("scrapling version:", getattr(scrapling, "__version__", "?"))
-            sig = inspect.signature(StealthyFetcher.fetch)
-            print("StealthyFetcher.fetch params:")
-            for name, p in sig.parameters.items():
-                print("  ", name, "=", p.default if p.default is not inspect._empty else "<required>")
-            for key in ("cookies", "extra_headers"):
-                print("HAS", key, ":", key in sig.parameters)
+            print("=== StealthyFetcher.fetch __doc__ ===")
+            print((StealthyFetcher.fetch.__doc__ or "")[:3000])
+            # The real engine is StealthySession / DynamicSession — inspect its __init__.
+            try:
+                from scrapling.engines.toolbelt.fingerprints import __name__ as _n
+            except Exception:
+                pass
+            import scrapling.fetchers as F
+            print("=== fetchers module file ===", F.__file__)
+            # Try to locate the session class signature behind .fetch
+            for modname in ("scrapling.engines._browsers._camoufox", "scrapling.engines.camo", "scrapling.engines._camoufox"):
+                try:
+                    m = __import__(modname, fromlist=["*"])
+                    print("FOUND MODULE", modname, "->", [c for c in dir(m) if "Session" in c or "Fetch" in c])
+                except Exception as e:
+                    print("no", modname)
+            for key in ("cookies", "extra_headers", "additional_args"):
+                print("DOC mentions", key, ":", key in (StealthyFetcher.fetch.__doc__ or ""))
             PYEOF
                 ;;
 
