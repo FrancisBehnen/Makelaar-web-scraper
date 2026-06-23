@@ -24,6 +24,7 @@ on:
           - scraper-db-stats
           - scraper-last-new
           - responder-detection-stats
+          - debug-huurstunt-locked
           - watchtower-logs
           - system-disk
           - system-memory
@@ -251,6 +252,46 @@ jobs:
             for r in c.execute("SELECT substr(url,1,55), status, substr(COALESCE(error,''),1,70) FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25"):
                 print("  {:<55} {:<8} {}".format(r[0], r[1], r[2]))
             c.close()
+            PYEOF
+                ;;
+
+              debug-huurstunt-locked)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import scraper
+            url = "https://www.huurstunt.nl/huren/delft"
+            body = scraper._http_get(url)
+            print("fetched bytes:", len(body))
+            page = scraper.Adaptor(body.decode("utf-8", "replace"), url=url)
+            all_articles = page.css("article")
+            dl_articles = page.css("article[data-loading]")
+            print("all <article>:", len(all_articles))
+            print("article[data-loading]:", len(dl_articles))
+            print("total a[href*='/huren/in/']:", len(page.css("a[href*='/huren/in/']")))
+            print("total a[href*='/aanmelden']:", len(page.css("a[href*='/aanmelden']")))
+            locked = []
+            for a in all_articles:
+                has_open = bool(a.css("a[href*='/huren/in/']"))
+                has_lock = bool(a.css("a[href*='/aanmelden']"))
+                if has_lock and not has_open:
+                    locked.append(a)
+            print("locked-only articles:", len(locked))
+            if locked:
+                a = locked[0]
+                print("=== FIRST LOCKED CARD ATTRS ===")
+                try:
+                    print(dict(a.attrib))
+                except Exception as e:
+                    print("attrib err:", e)
+                print("=== LINKS IN CARD ===")
+                for ln in a.css("a"):
+                    print("  href=", ln.attrib.get("href"), "| text=", (ln.get_all_text() or "").strip()[:60])
+                print("=== TEXT ===")
+                print((a.get_all_text() or "").strip()[:600])
+                print("=== HTML (first 4000 chars) ===")
+                try:
+                    print(a.html_content[:4000])
+                except Exception as e:
+                    print("html err:", e)
             PYEOF
                 ;;
 
