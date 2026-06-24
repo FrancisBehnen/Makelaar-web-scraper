@@ -79,8 +79,10 @@ All operations via `vps-exec.yml`:
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-ps
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-logs-sidecar --field lines=200
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-logs-errors --field lines=500
+gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-logs-responder --field lines=200
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-stats
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-restart-sidecar
+gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-restart-responder
 gh workflow run vps-exec.yml -R FrancisBehnen/Makelaar-web-scraper --ref main --field operation=docker-compose-config
 
 # Scraper diagnostics
