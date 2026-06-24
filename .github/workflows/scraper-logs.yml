@@ -10,6 +10,7 @@ on:
         options:
           - scraper-sidecar
           - makelaar-scraper
+          - scraper-responder
         default: scraper-sidecar
       lines:
         description: Number of log lines

@@ -11,11 +11,13 @@ on:
           - docker-ps
           - docker-logs-sidecar
           - docker-logs-main
+          - docker-logs-responder
           - docker-logs-errors
           - docker-stats
           - docker-restart-sidecar
           - docker-restart-main
           - docker-restart-both
+          - docker-restart-responder
           - responder-rebuild
           - docker-compose-config
           - scraper-cycle-status
@@ -47,7 +49,7 @@ jobs:
             case "${OP}" in
 
               docker-ps)
-                sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
+                sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=scraper-responder" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
                 ;;
 
               docker-logs-sidecar)
@@ -58,16 +60,23 @@ jobs:
                 sudo docker logs --tail "${LINES:-50}" makelaar-scraper 2>&1
                 ;;
 
+              docker-logs-responder)
+                sudo docker logs --tail "${LINES:-50}" scraper-responder 2>&1
+                ;;
+
               docker-logs-errors)
                 echo "=== Sidecar Errors ==="
                 sudo docker logs --tail "${LINES:-200}" scraper-sidecar 2>&1 | grep -iE "error|fatal|crash|panic|timed out|timeout|traceback|warning" || echo "No errors found"
                 echo ""
                 echo "=== Main Scraper Errors ==="
                 sudo docker logs --tail "${LINES:-200}" makelaar-scraper 2>&1 | grep -iE "error|fatal|crash|panic" || echo "No errors found"
+                echo ""
+                echo "=== Responder Errors ==="
+                sudo docker logs --tail "${LINES:-200}" scraper-responder 2>&1 | grep -iE "error|fatal|crash|panic|thread.*died|traceback" || echo "No errors found"
                 ;;
 
               docker-stats)
-                sudo docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" makelaar-scraper scraper-sidecar
+                sudo docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" makelaar-scraper scraper-sidecar scraper-responder
                 ;;
 
               docker-restart-sidecar)
@@ -87,9 +96,17 @@ jobs:
                 ;;
 
               docker-restart-both)
-                sudo docker restart scraper-sidecar makelaar-scraper
+                sudo docker restart scraper-sidecar makelaar-scraper scraper-responder
                 sleep 20
-                sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --format "table {{.Names}}\t{{.Status}}"
+                sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=scraper-responder" --format "table {{.Names}}\t{{.Status}}"
+                ;;
+
+              docker-restart-responder)
+                sudo docker restart scraper-responder
+                sleep 20
+                sudo docker ps -a --filter "name=scraper-responder" --format "table {{.Names}}\t{{.Status}}"
+                echo ""
+                sudo docker logs --tail 5 scraper-responder 2>&1
                 ;;
 
               responder-rebuild)
@@ -121,6 +138,9 @@ jobs:
                 echo ""
                 echo "=== Main Scraper Last Cycle ==="
                 sudo docker logs --tail 200 makelaar-scraper 2>&1 | grep -E "^Done$|^Connected|Found [0-9]" | tail -10
+                echo ""
+                echo "=== Responder Status ==="
+                sudo docker logs --tail 200 scraper-responder 2>&1 | grep -iE "starting|watcher|notified|thread.*died|duplicate" | tail -10
                 ;;
 
               scraper-db-stats)
@@ -196,6 +216,42 @@ jobs:
                 echo ""
                 echo "=== Telegram Notifications Sent ==="
                 sudo docker logs --tail 2000 scraper-sidecar 2>&1 | grep -iE "telegram|notification" | tail -10
+                ;;
+
+              responder-detection-stats)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import sqlite3, os, sys
+            db = os.environ.get("DB_PATH", "data/db.sqlite")
+            if not os.path.isfile(db):
+                print("Database not found at " + db); sys.exit(1)
+            c = sqlite3.connect(db)
+            has = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='responses'").fetchone()
+            if not has:
+                print("responses table does not exist yet"); sys.exit(0)
+            print("=== Contact method x status (all notified listings) ===")
+            for r in c.execute("SELECT COALESCE(contact_method,'(none)') AS method, status, COUNT(*) AS n FROM responses WHERE status != 'seeded' GROUP BY method, status ORDER BY method, status"):
+                print("  {:<15} {:<12} {}".format(r[0], r[1], r[2]))
+            print()
+            print("=== Per site (domain x method) ===")
+            q = """
+              WITH d AS (
+                SELECT COALESCE(contact_method,'(none)') AS method, status,
+                  CASE WHEN instr(h,'/')>0 THEN substr(h,1,instr(h,'/')-1) ELSE h END AS domain
+                FROM (SELECT contact_method, status,
+                        replace(replace(replace(url,'https://',''),'http://',''),'www.','') AS h
+                      FROM responses WHERE status != 'seeded')
+              )
+              SELECT domain, method, status, COUNT(*) AS n
+              FROM d GROUP BY domain, method, status ORDER BY domain, method
+            """
+            for r in c.execute(q):
+                print("  {:<35} {:<15} {:<12} {}".format(r[0], r[1], r[2], r[3]))
+            print()
+            print("=== Forms that fell back to manual / failed (with reason) ===")
+            for r in c.execute("SELECT substr(url,1,55), status, substr(COALESCE(error,''),1,70) FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25"):
+                print("  {:<55} {:<8} {}".format(r[0], r[1], r[2]))
+            c.close()
+            PYEOF
                 ;;
 
               watchtower-logs)

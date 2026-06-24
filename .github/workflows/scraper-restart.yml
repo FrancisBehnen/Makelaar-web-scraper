@@ -10,6 +10,7 @@ on:
         options:
           - scraper-sidecar
           - makelaar-scraper
+          - scraper-responder
           - both
         default: scraper-sidecar
 
@@ -27,7 +28,7 @@ jobs:
           script: |
             case "${TARGET}" in
               both)
-                sudo docker restart scraper-sidecar makelaar-scraper
+                sudo docker restart scraper-sidecar makelaar-scraper scraper-responder
                 ;;
               *)
                 sudo docker restart "${TARGET}"
@@ -39,7 +40,7 @@ jobs:
 
             echo ""
             echo "=== Container Status ==="
-            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --format "table {{.Names}}\t{{.Status}}"
+            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=scraper-responder" --format "table {{.Names}}\t{{.Status}}"
 
             echo ""
             echo "=== Last 10 log lines ==="

@@ -15,7 +15,7 @@ jobs:
           key: ${{ secrets.HOSTINGER_SSH_KEY }}
           script: |
             echo "=== Container Status ==="
-            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            sudo docker ps -a --filter "name=makelaar-scraper" --filter "name=scraper-sidecar" --filter "name=scraper-responder" --filter "name=watchtower" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
             echo ""
             echo "=== Sidecar Errors (last 200 lines) ==="
@@ -24,6 +24,10 @@ jobs:
             echo ""
             echo "=== Main Scraper Errors (last 200 lines) ==="
             sudo docker logs --tail 200 makelaar-scraper 2>&1 | grep -iE "error|fatal|crash|panic" || echo "No errors found"
+
+            echo ""
+            echo "=== Responder Errors (last 200 lines) ==="
+            sudo docker logs --tail 200 scraper-responder 2>&1 | grep -iE "error|fatal|crash|panic|thread.*died|traceback" || echo "No errors found"
 
             echo ""
             echo "=== Disk Usage ==="
