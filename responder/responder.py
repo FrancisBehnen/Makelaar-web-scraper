@@ -186,12 +186,23 @@ def watcher_loop() -> None:
         seeded = db.seed_existing()
         if seeded:
             log.info("First run: seeded %d existing listings (not notified)", seeded)
+    heartbeat_interval = max(1, 600 // config.POLL_INTERVAL)
+    polls = 0
     while True:
         try:
-            for url in db.new_house_urls():
+            new_urls = db.new_house_urls()
+            for url in new_urls:
                 _process_new_listing(url)
         except Exception:
             log.exception("Watcher cycle failed")
+        polls += 1
+        if polls % heartbeat_interval == 0:
+            log.info(
+                "Watcher alive — %d houses tracked, %d responses, poll #%d",
+                db.houses_count(),
+                db.responses_count(),
+                polls,
+            )
         time.sleep(config.POLL_INTERVAL)
 
 
@@ -376,6 +387,7 @@ def bot_loop() -> None:
             time.sleep(3600)
     raw_offset = db.kv_get("tg_offset")
     offset = int(raw_offset) if raw_offset else None
+    log.info("Bot loop started (offset=%s)", offset)
     while True:
         updates = tg.get_updates(offset)
         if updates is None:
