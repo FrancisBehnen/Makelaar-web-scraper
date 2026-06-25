@@ -19,6 +19,13 @@ from config import BROWSER_LOCK, FETCH_TIMEOUT
 
 log = logging.getLogger("responder")
 
+
+class _SuppressBenignCF(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "No Cloudflare challenge found" not in record.getMessage()
+
+logging.getLogger("scrapling").addFilter(_SuppressBenignCF())
+
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Addresses that are clearly not a makelaar inbox.
 EMAIL_JUNK = (
@@ -89,7 +96,19 @@ def _fetch(url: str):
         try:
             return future.result(timeout=FETCH_TIMEOUT)
         except Exception as exc:
-            log.error("Detection fetch of %s failed: %s", url, exc)
+            log.warning("Detection fetch of %s failed (%s), retrying without solve_cloudflare", url, exc)
+
+        future = _fetch_pool.submit(
+            StealthyFetcher.fetch,
+            url,
+            headless=True,
+            solve_cloudflare=False,
+            network_idle=True,
+        )
+        try:
+            return future.result(timeout=FETCH_TIMEOUT)
+        except Exception as exc:
+            log.error("Detection fetch of %s failed on retry: %s", url, exc)
             return None
 
 
