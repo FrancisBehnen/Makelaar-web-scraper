@@ -1623,6 +1623,25 @@ def scrape_ikwilhuren(page) -> list[dict[str, str]]:
     return houses
 
 
+def scrape_ikwilhuren_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    """Plain-HTTP fetcher for ikwilhuren.nu — the MVGM platform serves
+    server-rendered HTML that doesn't need JS, and their WAF blocks
+    headless browsers (Camoufox/StealthyFetcher) with 403."""
+    try:
+        body = _http_get(IKWILHUREN_URL)
+    except Exception as exc:
+        log.warning("ikwilhuren.nu: fetch failed: %s", exc)
+        return []
+
+    try:
+        page = Adaptor(body.decode("utf-8", errors="replace"), url=IKWILHUREN_URL)
+    except Exception as exc:
+        log.warning("ikwilhuren.nu: parse failed: %s", exc)
+        return []
+
+    return scrape_ikwilhuren(page)
+
+
 # ---------------------------------------------------------------------------
 # 070 Wonen parser (WordPress)
 # ---------------------------------------------------------------------------
@@ -2502,7 +2521,6 @@ SITES = [
     ("Oude Delft", OUDEDELFT_URL, scrape_oudedelft),
     ("Van Gulden Makelaardij", VANGULDEN_URL, scrape_vangulden),
     ("ZO Makelaars", ZOMAKELAARS_URL, scrape_zomakelaars),
-    ("ikwilhuren.nu", IKWILHUREN_URL, scrape_ikwilhuren),
     ("070 Wonen", ZEVENTIGWONEN_URL, scrape_070wonen),
     ("De Bruyn en Tak", DEBRUYNENTAK_URL, scrape_debruynentak),
     ("Nationaal Grondbezit", NATIONAALGRONDBEZIT_URL, scrape_nationaalgrondbezit),
@@ -2521,6 +2539,7 @@ CUSTOM_SITES = [
     ("Stedelink", scrape_stedelink_via_http),
     ("Huurflits", scrape_huurflits_via_http),
     ("Huurstunt", scrape_huurstunt_via_http),
+    ("ikwilhuren.nu", scrape_ikwilhuren_via_http),
     ("Woonzeker", scrape_woonzeker_via_sitemap),
 ]
 
