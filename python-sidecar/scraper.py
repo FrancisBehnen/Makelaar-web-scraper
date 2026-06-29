@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import subprocess
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -1624,19 +1625,21 @@ def scrape_ikwilhuren(page) -> list[dict[str, str]]:
 
 
 def scrape_ikwilhuren_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
-    """Plain-HTTP fetcher for ikwilhuren.nu — the MVGM platform serves
-    server-rendered HTML that doesn't need JS, and their WAF blocks
-    headless browsers (Camoufox/StealthyFetcher) with 403."""
+    """Fetch ikwilhuren.nu via curl — the MVGM WAF blocks Python's TLS
+    fingerprint (both urllib and StealthyFetcher) with 403."""
     try:
-        req = urllib.request.Request(IKWILHUREN_URL, headers={
-            "User-Agent": _PLAIN_HTTP_UA,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "nl,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = resp.read()
+        result = subprocess.run(
+            ["curl", "-s", "-L", "--max-time", "30",
+             "-H", f"User-Agent: {_PLAIN_HTTP_UA}",
+             "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+             "-H", "Accept-Language: nl,en;q=0.9",
+             IKWILHUREN_URL],
+            capture_output=True, timeout=35,
+        )
+        if result.returncode != 0:
+            log.warning("ikwilhuren.nu: curl exit %d: %s", result.returncode, result.stderr[:200])
+            return []
+        body = result.stdout
     except Exception as exc:
         log.warning("ikwilhuren.nu: fetch failed: %s", exc)
         return []
