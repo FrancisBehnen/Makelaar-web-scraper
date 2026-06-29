@@ -1628,7 +1628,15 @@ def scrape_ikwilhuren_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
     server-rendered HTML that doesn't need JS, and their WAF blocks
     headless browsers (Camoufox/StealthyFetcher) with 403."""
     try:
-        body = _http_get(IKWILHUREN_URL)
+        req = urllib.request.Request(IKWILHUREN_URL, headers={
+            "User-Agent": _PLAIN_HTTP_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "nl,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read()
     except Exception as exc:
         log.warning("ikwilhuren.nu: fetch failed: %s", exc)
         return []
