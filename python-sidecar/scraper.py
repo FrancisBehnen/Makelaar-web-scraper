@@ -149,6 +149,7 @@ WOONZEKER_SITEMAP_URL = (
 WOONZEKER_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("WOONZEKER_MAX_FETCHES_PER_CYCLE", "20")
 )
+HAYMANREALESTATE_URL = "https://haymanrealestate.nl/woningen/te-huur"
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -2517,6 +2518,121 @@ def scrape_woonzeker_via_sitemap(
 
 
 # ---------------------------------------------------------------------------
+# Hayman Real Estate parser (Webflow CMS, server-rendered)
+# ---------------------------------------------------------------------------
+# Listing cards are rendered into the static HTML by Webflow CMS; no browser
+# needed. Each card is an <a class="property-wrapper-v1"> element. The location
+# field (text-titles) usually contains "POSTAL City €price" for completed
+# entries; for freshly added listings without that data the city is extracted
+# from the property cover-image CDN filename ("HASH_City_Street_Number_n.avif").
+
+def scrape_haymanrealestate_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    from urllib.parse import unquote
+
+    try:
+        body = _http_get(HAYMANREALESTATE_URL)
+    except Exception as exc:
+        log.warning("Hayman Real Estate: fetch failed: %s", exc)
+        return []
+
+    try:
+        page = Adaptor(body.decode("utf-8", errors="replace"), url=HAYMANREALESTATE_URL)
+    except Exception as exc:
+        log.warning("Hayman Real Estate: parse failed: %s", exc)
+        return []
+
+    houses: list[dict[str, str]] = []
+    cards = page.css("a.property-wrapper-v1")
+    log.info("Hayman Real Estate: %d listing elements found", len(cards))
+
+    for card in cards:
+        try:
+            href = card.attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://haymanrealestate.nl")
+            if url in existing_urls:
+                continue
+
+            # Skip "Verhuurd" (rented out) listings
+            badge_els = card.css(".property-badge .text-fix div")
+            badge_text = (
+                (badge_els[0].text or badge_els[0].get_all_text() or "").strip().lower()
+                if badge_els else ""
+            )
+            if "verhuurd" in badge_text:
+                continue
+
+            address = _first_text(card, "h2")
+
+            # Location field: "2518HX Den Haag €2150,00 excl." or just the street
+            loc_els = card.css(".text-titles div")
+            loc_text = (loc_els[0].get_all_text() or "").strip() if loc_els else ""
+
+            # Extract city from postal code prefix
+            city = ""
+            pc_m = re.match(
+                r"^\d{4}\s*[A-Z]{2}\s+(.+?)(?:\s+-?\s*€|\s+[Ee]xcl|\s+[Ii]ncl|$)",
+                loc_text,
+            )
+            if pc_m:
+                city = re.sub(r"\s+-\s*$", "", pc_m.group(1)).strip()
+
+            # Fallback: parse city from cover image CDN filename
+            # Format: HASH_City_Street_Number_index.ext (city uses spaces, not underscores)
+            if not city:
+                img_els = card.css("img.cover-image")
+                if img_els:
+                    img_src = img_els[0].attrib.get("src", "")
+                    filename = unquote(img_src.rsplit("/", 1)[-1])
+                    after_hash = re.sub(r"^[a-f0-9]+_", "", filename, flags=re.IGNORECASE)
+                    city_candidate = after_hash.split("_")[0]
+                    if city_candidate and not city_candidate[0].isdigit():
+                        city = city_candidate
+
+            if city and not is_delft_area(city):
+                continue
+
+            price = ""
+            price_m = re.search(r"€\s*[\d.,]+", loc_text)
+            if price_m:
+                price = price_m.group(0).strip()
+
+            price_val = parse_price_euros(price)
+            if price_val and price_val > MAX_PRICE:
+                continue
+
+            area = ""
+            bedrooms = ""
+            for feature in card.css(".card-feature-wrapper"):
+                img_els = feature.css("img")
+                if not img_els:
+                    continue
+                alt = (img_els[0].attrib.get("alt", "") or "").lower()
+                val_els = feature.css(".text-neutral-light div")
+                val = (val_els[0].get_all_text() or "").strip() if val_els else ""
+                if "sqft" in alt and val:
+                    area = f"{val} m²"
+                elif "bedroom" in alt and val and val.isdigit():
+                    n = val
+                    bedrooms = "1 kamer" if n == "1" else f"{n} kamers"
+
+            houses.append({
+                "url": url,
+                "straatnaamHuisnummer": address or "Onbekend",
+                "plaats": city or "Onbekend",
+                "vraagprijs": price,
+                "oppervlakte": area,
+                "kamers": bedrooms,
+            })
+        except Exception as exc:
+            log.warning("Hayman Real Estate: failed to parse a listing: %s", exc)
+
+    log.info("Hayman Real Estate: %d new listing(s)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -2552,6 +2668,7 @@ CUSTOM_SITES = [
     ("Huurstunt", scrape_huurstunt_via_http),
     ("ikwilhuren.nu", scrape_ikwilhuren_via_http),
     ("Woonzeker", scrape_woonzeker_via_sitemap),
+    ("Hayman Real Estate", scrape_haymanrealestate_via_http),
 ]
 
 
