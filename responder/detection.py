@@ -119,13 +119,8 @@ def _fetch(url: str):
         except Exception as exc:
             log.warning("Detection fetch of %s failed (%s), retrying without solve_cloudflare", url, exc)
 
-        future = _fetch_pool.submit(
-            StealthyFetcher.fetch,
-            url,
-            headless=True,
-            solve_cloudflare=False,
-            network_idle=True,
-        )
+        retry_kwargs = {**kwargs, "solve_cloudflare": False}
+        future = _fetch_pool.submit(StealthyFetcher.fetch, url, **retry_kwargs)
         try:
             return future.result(timeout=FETCH_TIMEOUT)
         except Exception as exc:
