@@ -706,3 +706,138 @@ def test_scrape_olsthoorn_sales_paginates_until_empty(monkeypatch):
         s.OLSTHOORN_WONEN_URL,
         s.OLSTHOORN_WONEN_PAGE_URL.format(page=2),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Van Silfhout Makelaars koop grid (WordPress + FacetWP REST refresh)
+# ---------------------------------------------------------------------------
+# The bare "Kamers" number on each card is already total kamers (cross-checked
+# against a real detail page's separate "Slaapkamers" row), so no
+# bedrooms_to_kamers conversion is needed here. A "Prijs Op Aanvraag" listing
+# uses a placeholder "€ 1 k.k." under a different label — passes_filters must
+# reject it rather than treat it as a genuine sub-270k match.
+
+VANSILFHOUT_TEMPLATE_HTML = """
+<div class="objectcontainer">
+  <article class="row">
+    <div class="col-sm-6 col-md-6 noPdr">
+      <a class="objectcontainerimg" href="https://www.vansilfhout.nl/aanbod/voorstraat-1-delft/">
+        <span class="objectstatus ">Te koop</span>
+      </a>
+    </div>
+    <div class="col-sm-6 col-md-6 objectcontainerinfo">
+      <a class="straatnaamwoonplaats" href="https://www.vansilfhout.nl/aanbod/voorstraat-1-delft/">
+        <h2 class="objecttitle">Voorstraat 1</h2>
+        <span>Delft</span>
+      </a>
+      <ul class="shortSpecs">
+        <li><span>Vraagprijs:</span> <strong>€ 250.000 k.k.</strong></li>
+        <li><span>Oppervlakte:</span> <span>80 m<sup>2</sup></span></li>
+        <li><span>Kamers:</span> <span>3</span></li>
+      </ul>
+      <a class="bekijkenlink" href="https://www.vansilfhout.nl/aanbod/voorstraat-1-delft/">Bekijken</a>
+    </div>
+  </article>
+</div>
+<div class="objectcontainer">
+  <article class="row">
+    <div class="col-sm-6 col-md-6 noPdr">
+      <a class="objectcontainerimg" href="https://www.vansilfhout.nl/aanbod/achterstraat-9-delft/">
+        <span class="objectstatus ">Te koop</span>
+      </a>
+    </div>
+    <div class="col-sm-6 col-md-6 objectcontainerinfo">
+      <a class="straatnaamwoonplaats" href="https://www.vansilfhout.nl/aanbod/achterstraat-9-delft/">
+        <h2 class="objecttitle">Achterstraat 9</h2>
+        <span>Delft</span>
+      </a>
+      <ul class="shortSpecs">
+        <li><span>Prijs Op Aanvraag:</span> <strong>€ 1 k.k.</strong></li>
+        <li><span>Oppervlakte:</span> <span>803 m<sup>2</sup></span></li>
+        <li><span>Kamers:</span> <span>8</span></li>
+      </ul>
+      <a class="bekijkenlink" href="https://www.vansilfhout.nl/aanbod/achterstraat-9-delft/">Bekijken</a>
+    </div>
+  </article>
+</div>
+<div class="objectcontainer">
+  <article class="row">
+    <div class="col-sm-6 col-md-6 noPdr">
+      <a class="objectcontainerimg" href="https://www.vansilfhout.nl/aanbod/kerkstraat-2-rijswijk/">
+        <span class="objectstatus ">Te koop</span>
+      </a>
+    </div>
+    <div class="col-sm-6 col-md-6 objectcontainerinfo">
+      <a class="straatnaamwoonplaats" href="https://www.vansilfhout.nl/aanbod/kerkstraat-2-rijswijk/">
+        <h2 class="objecttitle">Kerkstraat 2</h2>
+        <span>Rijswijk</span>
+      </a>
+      <ul class="shortSpecs">
+        <li><span>Vraagprijs:</span> <strong>€ 230.000 k.k.</strong></li>
+        <li><span>Oppervlakte:</span> <span>70 m<sup>2</sup></span></li>
+        <li><span>Kamers:</span> <span>3</span></li>
+      </ul>
+      <a class="bekijkenlink" href="https://www.vansilfhout.nl/aanbod/kerkstraat-2-rijswijk/">Bekijken</a>
+    </div>
+  </article>
+</div>
+"""
+
+
+def test_vansilfhout_card_available_delft_parsed():
+    page = _adaptor(
+        VANSILFHOUT_TEMPLATE_HTML, "https://www.vansilfhout.nl/woningaanbod/"
+    )
+    card = page.css(".objectcontainer")[0]
+    h = s._parse_vansilfhout_card(card)
+    assert h is not None
+    assert h["url"] == "https://www.vansilfhout.nl/aanbod/voorstraat-1-delft/"
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert h["vraagprijs"] == "€ 250.000 k.k."
+    assert h["oppervlakte"] == "80 m²"  # nested <sup>2</sup> rebuilt, not "80 m 2"
+    assert h["kamers"] == "3 kamers"  # bare card number is already total kamers
+    assert s.passes_filters(h) is True
+
+
+def test_vansilfhout_card_price_on_request_excluded():
+    page = _adaptor(
+        VANSILFHOUT_TEMPLATE_HTML, "https://www.vansilfhout.nl/woningaanbod/"
+    )
+    card = page.css(".objectcontainer")[1]
+    h = s._parse_vansilfhout_card(card)
+    assert h is not None
+    assert h["vraagprijs"] == ""  # "Prijs Op Aanvraag" isn't "Vraagprijs"
+    assert s.passes_filters(h) is False
+
+
+def test_vansilfhout_card_non_delft_skipped():
+    page = _adaptor(
+        VANSILFHOUT_TEMPLATE_HTML, "https://www.vansilfhout.nl/woningaanbod/"
+    )
+    card = page.css(".objectcontainer")[2]
+    assert s._parse_vansilfhout_card(card) is None  # Rijswijk
+
+
+def test_scrape_vansilfhout_sales_paginates_across_facetwp_pages(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    requested_pages = []
+
+    def fake_refresh(paged):
+        requested_pages.append(paged)
+        if paged == 1:
+            return {
+                "template": VANSILFHOUT_TEMPLATE_HTML,
+                "settings": {"pager": {"total_pages": 2}},
+            }
+        return {"template": "", "settings": {"pager": {"total_pages": 2}}}
+
+    monkeypatch.setattr(s, "_facetwp_refresh", fake_refresh)
+    houses = s.scrape_vansilfhout_sales(set())
+
+    assert requested_pages == [1, 2]
+    assert len(houses) == 2  # Delft koop cards on page 1; Rijswijk card dropped
+    assert {h["straatnaamHuisnummer"] for h in houses} == {
+        "Voorstraat 1",
+        "Achterstraat 9",
+    }
