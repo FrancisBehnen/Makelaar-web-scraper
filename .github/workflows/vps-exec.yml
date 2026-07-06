@@ -24,6 +24,11 @@ on:
           - scraper-db-stats
           - scraper-last-new
           - responder-detection-stats
+          - debug-huurstunt-locked
+          - debug-huurstunt-login
+          - debug-huurstunt-cookie
+          - debug-scrapling-sig
+          - sidecar-reload-env
           - watchtower-logs
           - system-disk
           - system-memory
@@ -251,6 +256,147 @@ jobs:
             for r in c.execute("SELECT substr(url,1,55), status, substr(COALESCE(error,''),1,70) FROM responses WHERE status IN ('manual','failed') ORDER BY updated_at DESC LIMIT 25"):
                 print("  {:<55} {:<8} {}".format(r[0], r[1], r[2]))
             c.close()
+            PYEOF
+                ;;
+
+              debug-huurstunt-locked)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import scraper
+            url = "https://www.huurstunt.nl/huren/delft"
+            body = scraper._http_get(url)
+            print("fetched bytes:", len(body))
+            page = scraper.Adaptor(body.decode("utf-8", "replace"), url=url)
+            all_articles = page.css("article")
+            dl_articles = page.css("article[data-loading]")
+            print("all <article>:", len(all_articles))
+            print("article[data-loading]:", len(dl_articles))
+            print("total a[href*='/huren/in/']:", len(page.css("a[href*='/huren/in/']")))
+            print("total a[href*='/aanmelden']:", len(page.css("a[href*='/aanmelden']")))
+            locked = []
+            for a in all_articles:
+                has_open = bool(a.css("a[href*='/huren/in/']"))
+                has_lock = bool(a.css("a[href*='/aanmelden']"))
+                if has_lock and not has_open:
+                    locked.append(a)
+            print("locked-only articles:", len(locked))
+            if locked:
+                a = locked[0]
+                print("=== FIRST LOCKED CARD ATTRS ===")
+                try:
+                    print(dict(a.attrib))
+                except Exception as e:
+                    print("attrib err:", e)
+                print("=== LINKS IN CARD ===")
+                for ln in a.css("a"):
+                    print("  href=", ln.attrib.get("href"), "| text=", (ln.get_all_text() or "").strip()[:60])
+                print("=== TEXT ===")
+                print((a.get_all_text() or "").strip()[:600])
+                print("=== HTML (first 4000 chars) ===")
+                try:
+                    print(a.html_content[:4000])
+                except Exception as e:
+                    print("html err:", e)
+            PYEOF
+                ;;
+
+              debug-huurstunt-login)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import scraper
+            for url in ("https://www.huurstunt.nl/inloggen", "https://www.huurstunt.nl/aanmelden", "https://www.huurstunt.nl/aanmelden?huis=f0cs6"):
+                print("\n############ " + url + " ############")
+                try:
+                    body = scraper._http_get(url)
+                except Exception as e:
+                    print("fetch err:", repr(e)); continue
+                print("bytes:", len(body))
+                page = scraper.Adaptor(body.decode("utf-8", "replace"), url=url)
+                forms = page.css("form")
+                print("forms:", len(forms))
+                for fi, f in enumerate(forms):
+                    print("--- form", fi, "action=", f.attrib.get("action"), "method=", f.attrib.get("method"), "---")
+                    for inp in f.css("input"):
+                        at = dict(inp.attrib)
+                        print("   input name=", at.get("name"), "type=", at.get("type"), "value=", (at.get("value") or "")[:40])
+                    for btn in f.css("button"):
+                        print("   button:", (btn.get_all_text() or "").strip()[:50], "type=", btn.attrib.get("type"))
+                # surface any wording about password vs magic link / email-only
+                txt = (page.get_all_text() or "")
+                for kw in ("wachtwoord", "magic", "e-mail", "email", "verificatie", "inloglink", "link", "code"):
+                    i = txt.lower().find(kw)
+                    if i != -1:
+                        print("   kw[%s]: ...%s..." % (kw, txt[max(0,i-40):i+60].replace(chr(10)," ").strip()))
+            PYEOF
+                ;;
+
+              debug-huurstunt-cookie)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import os, urllib.request, scraper
+            cookie = os.environ.get("HUURSTUNT_COOKIE", "").strip()
+            print("HUURSTUNT_COOKIE present:", bool(cookie), "| length:", len(cookie))
+            def fetch(u, ck):
+                h = {"User-Agent": scraper._PLAIN_HTTP_UA}
+                if ck:
+                    h["Cookie"] = ck
+                return urllib.request.urlopen(urllib.request.Request(u, headers=h), timeout=30).read()
+            url = "https://www.huurstunt.nl/huren/delft"
+            for label, ck in (("ANON", None), ("WITH-COOKIE", cookie or None)):
+                if ck is None and label == "WITH-COOKIE":
+                    print("\n[WITH-COOKIE] skipped — no cookie set in container env"); continue
+                try:
+                    body = fetch(url, ck)
+                except Exception as e:
+                    print("\n[%s] fetch err: %r" % (label, e)); continue
+                page = scraper.Adaptor(body.decode("utf-8", "replace"), url=url)
+                cards = page.css("article[data-loading]")
+                openc = [c for c in cards if c.css("a[href*='/huren/in/']")]
+                locked = [c for c in cards if c.css("a[href*='/aanmelden']") and not c.css("a[href*='/huren/in/']")]
+                print("\n[%s] bytes=%d cards=%d open=%d locked=%d" % (label, len(body), len(cards), len(openc), len(locked)))
+                if openc:
+                    c = openc[0]
+                    h3 = c.css("h3")
+                    addr = (h3[0].get_all_text().strip() if h3 else "")
+                    foot = c.css("footer p")
+                    price = (foot[0].get_all_text().strip() if foot else "")
+                    print("   sample open card: addr=%r price=%r" % (addr[:50], price[:30]))
+            PYEOF
+                ;;
+
+              sidecar-reload-env)
+                COMPOSE=$(ls /docker/makelaar/docker-compose.yml /docker/makelaar-scraper/docker-compose.yml 2>/dev/null | head -1)
+                if [ -z "$COMPOSE" ]; then
+                  COMPOSE=$(find /docker -name "docker-compose.yml" -path "*makelaar*" 2>/dev/null | head -1)
+                fi
+                if [ -z "$COMPOSE" ]; then echo "Compose file not found"; exit 1; fi
+                echo "Using compose file: $COMPOSE"
+                cd "$(dirname "$COMPOSE")"
+                sudo docker compose up -d scraper-sidecar
+                sleep 10
+                sudo docker exec scraper-sidecar sh -c 'echo "HUURSTUNT_COOKIE present in container: $([ -n "$HUURSTUNT_COOKIE" ] && echo yes || echo no) (len ${#HUURSTUNT_COOKIE})"'
+                ;;
+
+              debug-scrapling-sig)
+                sudo docker exec -i scraper-sidecar python3 << 'PYEOF'
+            import inspect, scrapling
+            from scrapling.fetchers import StealthyFetcher
+            print("scrapling version:", getattr(scrapling, "__version__", "?"))
+            print("=== StealthyFetcher.fetch __doc__ ===")
+            print((StealthyFetcher.fetch.__doc__ or "")[:3000])
+            # The real engine is StealthySession / DynamicSession — inspect its __init__.
+            try:
+                from scrapling.engines.toolbelt.fingerprints import __name__ as _n
+            except Exception:
+                pass
+            import scrapling.fetchers as F
+            print("=== fetchers module file ===", F.__file__)
+            # Try to locate the session class signature behind .fetch
+            for modname in ("scrapling.engines._browsers._camoufox", "scrapling.engines.camo", "scrapling.engines._camoufox"):
+                try:
+                    m = __import__(modname, fromlist=["*"])
+                    print("FOUND MODULE", modname, "->", [c for c in dir(m) if "Session" in c or "Fetch" in c])
+                except Exception as e:
+                    print("no", modname)
+            for key in ("cookies", "extra_headers", "additional_args"):
+                print("DOC mentions", key, ":", key in (StealthyFetcher.fetch.__doc__ or ""))
             PYEOF
                 ;;
 

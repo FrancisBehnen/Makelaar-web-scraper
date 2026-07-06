@@ -150,6 +150,13 @@ WOONZEKER_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("WOONZEKER_MAX_FETCHES_PER_CYCLE", "20")
 )
 HAYMANREALESTATE_URL = "https://haymanrealestate.nl/woningen/te-huur"
+# Optional session cookie for Huurstunt. The site gates listing detail behind
+# an email magic-link login (no password, plus reCAPTCHA), so the session can't
+# be re-established headlessly. Capture the logged-in `Cookie:` header once from
+# a browser and set it here; the scraper then sees the otherwise-locked cards as
+# full listings. When the session expires the cards re-lock — the scraper logs a
+# warning and falls back to the (limited) anonymous data.
+HUURSTUNT_COOKIE = os.environ.get("HUURSTUNT_COOKIE", "").strip()
 
 # ---------------------------------------------------------------------------
 # Filtering criteria (matches the Bun app's RealtimeListingsJsonResponseProcessor)
@@ -223,8 +230,11 @@ _PLAIN_HTTP_UA = (
 )
 
 
-def _http_get(url: str, timeout: int = 30) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": _PLAIN_HTTP_UA})
+def _http_get(url: str, timeout: int = 30, cookie: str | None = None) -> bytes:
+    headers = {"User-Agent": _PLAIN_HTTP_UA}
+    if cookie:
+        headers["Cookie"] = cookie
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
@@ -2304,11 +2314,12 @@ def scrape_huurstunt_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
 
     houses: list[dict[str, str]] = []
     seen: set[str] = set()
+    stale_warned = False
 
     for city_label, slug in _HUURSTUNT_SEARCH_SLUGS.items():
         page_url = f"{HUURSTUNT_BASE_URL}/huren/{slug}"
         try:
-            body = _http_get(page_url)
+            body = _http_get(page_url, cookie=HUURSTUNT_COOKIE or None)
         except Exception as exc:
             log.warning("Huurstunt: fetch failed for %s: %s", city_label, exc)
             continue
@@ -2321,6 +2332,20 @@ def scrape_huurstunt_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
 
         # Real listing cards have data-loading; z-10 skeleton placeholders don't.
         cards = page.css("article[data-loading]")
+        # Login-gated cards link to /aanmelden instead of /huren/in/. With a valid
+        # HUURSTUNT_COOKIE they unlock; if they're still locked the session has
+        # expired, so warn once per cycle (the cookie needs re-capturing).
+        if HUURSTUNT_COOKIE and not stale_warned:
+            locked = [
+                c for c in cards
+                if c.css('a[href*="/aanmelden"]') and not c.css('a[href*="/huren/in/"]')
+            ]
+            if locked:
+                log.warning(
+                    "Huurstunt: %d card(s) still login-locked despite HUURSTUNT_COOKIE "
+                    "— session likely expired, re-capture the cookie", len(locked),
+                )
+                stale_warned = True
         log.info("Huurstunt (%s): %d listing cards", city_label, len(cards))
 
         for card in cards:
