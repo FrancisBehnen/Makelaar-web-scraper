@@ -124,6 +124,38 @@ OLSTHOORN_WONEN_PAGE_URL = f"{OLSTHOORN_BASE}/wonen/page/{{page}}/"
 VANSILFHOUT_BASE = "https://www.vansilfhout.nl"
 VANSILFHOUT_REFRESH_URL = f"{VANSILFHOUT_BASE}/wp-json/facetwp/v1/refresh"
 
+# De Bruyn en Tak (custom CMS, same card structure as rental sidecar).
+# Server-rendered; the /te-koop/delft/ filter is URL-driven.
+DEBRUYNENTAK_KOOP_URL = (
+    "https://www.debruynentak.nl/aanbod/woningen/te-koop/delft/"
+)
+
+# Van Gulden Makelaardij (WordPress / Betheme, MTMO plugin).
+# /aanbod/ lists predominantly koop; a stray huur listing with "per maand"
+# in its price is filtered out. Server-rendered over plain HTTP.
+VANGULDEN_KOOP_URL = "https://vanguldenmakelaardij.nl/aanbod/"
+
+# Frisia Makelaars — same sitemap as the rental sidecar. The feed mixes
+# huur and koop; the detail-page parser gates on a "Vraagprijs" feature
+# block (the rental sidecar gates on "Huurprijs").
+FRISIA_SITEMAP_URL = "https://frisiamakelaars.nl/sitemap/properties.xml"
+FRISIA_MAX_FETCHES_PER_CYCLE = int(
+    os.environ.get("FRISIA_MAX_FETCHES_PER_CYCLE", "10")
+)
+
+# Marloes Makelaars — WordPress property CPT sitemap. Mixes koop and
+# huur; the rental sidecar keeps "per maand", the sales parser keeps
+# "k.k." / "v.o.n.".
+MARLOES_SITEMAP_URL = (
+    "https://www.marloesmakelaars.nl/wp-sitemap-posts-property-1.xml"
+)
+
+# PSG Wonen (Hayweb platform, same as Prinsenstad). The residential-sale
+# sitemap lists koop objects directly.
+PSGWONEN_SALE_SITEMAP_URL = (
+    "https://www.psg-wonen.nl/sitemap_listings_res_sale.xml"
+)
+
 _SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # ---------------------------------------------------------------------------
@@ -1091,6 +1123,224 @@ def _parse_vansilfhout_card(card) -> dict[str, str] | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# De Bruyn en Tak koop (same card structure as rental sidecar)
+# ---------------------------------------------------------------------------
+
+
+def scrape_debruynentak_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    from scrapling.parser import Adaptor
+
+    try:
+        body = _http_get(DEBRUYNENTAK_KOOP_URL)
+    except Exception as exc:
+        log.warning("De Bruyn en Tak koop: fetch failed: %s", exc)
+        return []
+    page = Adaptor(content=body, url=DEBRUYNENTAK_KOOP_URL)
+    houses: list[dict[str, str]] = []
+
+    items = page.css("div.objectList div.item")
+    log.info("De Bruyn en Tak koop: %d listing elements found", len(items))
+
+    for item in items:
+        try:
+            label = _first_text(item, "div.label")
+            if _SOLD_STATUS_RE.search(label):
+                continue
+
+            link_el = item.css("a.itemTitel")
+            if not link_el:
+                continue
+            href = link_el[0].attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://www.debruynentak.nl")
+
+            address = _first_text(item, "span.objectTitel")
+            if not address:
+                slug = href.rsplit("/", 1)[-1].removesuffix(".html")
+                address = slug.replace("-", " ").strip().title()
+
+            city = _first_text(item, "span.itemSubtitel") or "Delft"
+
+            if city and not is_delft_city(city):
+                continue
+
+            price_txt = _first_text(item, "div.itemPrice .price")
+            price = f"€ {price_txt}" if price_txt else ""
+
+            specs = _first_text(item, "span.itemSpecs")
+
+            area = ""
+            area_match = re.search(r"(\d+)\s*m[²2]", specs)
+            if area_match:
+                area = f"{area_match.group(1)} m²"
+
+            rooms = ""
+            rooms_match = re.search(
+                r"(\d+)\s*kamer", specs, re.IGNORECASE
+            )
+            if rooms_match:
+                n = int(rooms_match.group(1))
+                rooms = "1 kamer" if n == 1 else f"{n} kamers"
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city,
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("De Bruyn en Tak koop: failed to parse a listing: %s", exc)
+
+    log.info("De Bruyn en Tak koop: %d koop candidate(s)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Van Gulden Makelaardij koop (WordPress / Betheme, MTMO plugin)
+# ---------------------------------------------------------------------------
+
+
+def scrape_vangulden_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    from scrapling.parser import Adaptor
+
+    try:
+        body = _http_get(VANGULDEN_KOOP_URL)
+    except Exception as exc:
+        log.warning("Van Gulden koop: fetch failed: %s", exc)
+        return []
+    page = Adaptor(content=body, url=VANGULDEN_KOOP_URL)
+    houses: list[dict[str, str]] = []
+
+    listings = page.css('a[href*="aanbod-detail"]')
+    log.info("Van Gulden koop: %d listing elements found", len(listings))
+
+    for listing in listings:
+        try:
+            href = listing.attrib.get("href", "")
+            if not href:
+                continue
+            url = make_absolute(href, "https://vanguldenmakelaardij.nl")
+
+            address = _first_text(listing, "div.titel")
+            city = _first_text(listing, "p.notranslate")
+
+            price = _first_text(listing, "div.price")
+
+            if "per maand" in price.lower():
+                continue
+
+            if city and not is_delft_city(city):
+                continue
+
+            area = ""
+            rooms = ""
+            kenmerken = listing.css("div.kenmerk")
+            for kenmerk in kenmerken:
+                img_els = kenmerk.css("img")
+                if not img_els:
+                    continue
+                alt = (img_els[0].attrib.get("alt", "") or "").lower()
+                val = (kenmerk.get_all_text() or "").strip()
+                if "woonoppervlakte" in alt:
+                    area = val
+                elif "kamers_icon" in alt:
+                    rooms = val
+
+            houses.append(
+                {
+                    "url": url,
+                    "straatnaamHuisnummer": address or "Onbekend",
+                    "plaats": city or "Delft",
+                    "vraagprijs": price,
+                    "oppervlakte": area,
+                    "kamers": rooms,
+                }
+            )
+        except Exception as exc:
+            log.warning("Van Gulden koop: failed to parse a listing: %s", exc)
+
+    log.info("Van Gulden koop: %d koop candidate(s)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Frisia Makelaars koop via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Same sitemap as the rental sidecar; the detail-page parser gates on a
+# "Vraagprijs" feature block (the rental parser gates on "Huurprijs").
+
+
+def _parse_frisia_koop_listing(url: str, body: bytes) -> dict[str, str] | None:
+    from scrapling.parser import Adaptor
+
+    a = Adaptor(content=body, url=url)
+
+    price_block = next(
+        (
+            b
+            for b in a.css(".panel__block__feature")
+            if "Vraagprijs" in b.get_all_text(separator=" ", strip=True)
+            or "Koopprijs" in b.get_all_text(separator=" ", strip=True)
+        ),
+        None,
+    )
+    if price_block is None:
+        return None
+
+    price_line = price_block.get_all_text(separator=" ", strip=True)
+    for label in ("Vraagprijs", "Koopprijs"):
+        if label in price_line:
+            price = price_line.split(label, 1)[-1].strip(" |")
+            break
+    else:
+        price = price_line
+
+    status_block = next(
+        (
+            b
+            for b in a.css(".panel__block__feature")
+            if "Status" in b.get_all_text(separator=" ", strip=True)
+        ),
+        None,
+    )
+    if status_block is not None:
+        status_text = status_block.get_all_text(separator=" ", strip=True)
+        if _SOLD_STATUS_RE.search(status_text):
+            return None
+
+    h1 = a.css("h1")
+    full_address = h1[0].get_all_text(separator=" ", strip=True) if h1 else ""
+    parts = [p.strip() for p in full_address.split(",") if p.strip()]
+    street = parts[0] if parts else "Onbekend"
+    city = parts[-1] if len(parts) >= 2 else ""
+    if city and not is_delft_city(city):
+        return None
+
+    area = ""
+    rooms = ""
+    for li in a.css(".section--intro__list li"):
+        val = li.get_all_text(separator=" ", strip=True)
+        if li.css(".icon-livearea"):
+            area = val
+        elif li.css(".icon-bedroom"):
+            rooms = val
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": street or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
 def scrape_vansilfhout_sales(existing_urls: set[str]) -> list[dict[str, str]]:
     """Fetch Van Silfhout Makelaars' koop grid via FacetWP's REST refresh
     endpoint, with facets pinned to status=te-koop and locaties=delft.
@@ -1138,6 +1388,216 @@ def scrape_vansilfhout_sales(existing_urls: set[str]) -> list[dict[str, str]]:
     return houses
 
 
+def scrape_frisia_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(FRISIA_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Frisia koop: sitemap fetch failed: %s", exc)
+        return []
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Frisia koop: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Frisia koop: sitemap has %d total URLs", len(all_urls))
+
+    candidates = [u for u in all_urls if is_delft_city(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Frisia koop: %d Delft candidates, %d new",
+        len(candidates),
+        len(new_candidates),
+    )
+
+    if len(new_candidates) > FRISIA_MAX_FETCHES_PER_CYCLE:
+        log.info(
+            "Frisia koop: capping detail fetches at %d this cycle",
+            FRISIA_MAX_FETCHES_PER_CYCLE,
+        )
+        new_candidates = new_candidates[:FRISIA_MAX_FETCHES_PER_CYCLE]
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Frisia koop: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_frisia_koop_listing(url, body)
+        except Exception as exc:
+            log.warning("Frisia koop: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Frisia koop: %d koop match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# Marloes Makelaars koop via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Same WordPress sitemap as the rental sidecar. The rental parser keeps
+# "per maand" prices; the sales parser keeps "k.k." / "v.o.n." prices.
+
+
+def _parse_marloes_koop_listing(url: str, body: bytes) -> dict[str, str] | None:
+    from scrapling.parser import Adaptor
+
+    a = Adaptor(content=body, url=url)
+
+    fields: dict[str, str] = {}
+    for dt, dd in zip(a.css("dl dt"), a.css("dl dd")):
+        label = (dt.text or "").strip().lower()
+        if not label:
+            continue
+        val = (dd.text or "").strip() or (dd.get_all_text() or "").strip()
+        fields[label] = val
+
+    price = fields.get("prijs", "")
+    price_lower = price.lower()
+    if "per maand" in price_lower:
+        return None
+    if "k.k." not in price_lower and "v.o.n." not in price_lower:
+        return None
+
+    status = fields.get("status", "")
+    if _SOLD_STATUS_RE.search(status):
+        return None
+
+    city = fields.get("plaats", "")
+    if city and not is_delft_city(city):
+        return None
+
+    title_els = a.css("title")
+    title = (title_els[0].text or "").strip() if title_els else ""
+    address = title.split(" | ", 1)[0].strip()
+    if city:
+        address = re.sub(
+            rf"\s+te\s+{re.escape(city)}\s*$", "", address, flags=re.I
+        ).strip()
+
+    rooms_raw = fields.get("slaapkamers", "")
+    if rooms_raw.isdigit():
+        rooms = bedrooms_to_kamers(int(rooms_raw))
+    else:
+        rooms = rooms_raw
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": (city or "Delft").title(),
+        "vraagprijs": price,
+        "oppervlakte": fields.get("oppervlakte", ""),
+        "kamers": rooms,
+    }
+
+
+def scrape_marloes_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(MARLOES_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Marloes koop: sitemap fetch failed: %s", exc)
+        return []
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Marloes koop: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Marloes koop: sitemap has %d total URLs", len(all_urls))
+
+    candidates = [u for u in all_urls if is_delft_city(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Marloes koop: %d Delft candidates, %d new",
+        len(candidates),
+        len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Marloes koop: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_marloes_koop_listing(url, body)
+        except Exception as exc:
+            log.warning("Marloes koop: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Marloes koop: %d koop match(es)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
+# PSG Wonen koop via sale sitemap + per-listing plain HTTP (Hayweb)
+# ---------------------------------------------------------------------------
+# Same Hayweb parser as Prinsenstad — reuses _parse_prinsenstad_koop_listing.
+
+
+def scrape_psgwonen_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(PSGWONEN_SALE_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("PSG Wonen koop: sitemap fetch failed: %s", exc)
+        return []
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("PSG Wonen koop: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls = [
+        loc.text
+        for u in root.findall("sm:url", _SITEMAP_NS)
+        if (loc := u.find("sm:loc", _SITEMAP_NS)) is not None and loc.text
+    ]
+    log.info("PSG Wonen koop: sale sitemap has %d total URLs", len(all_urls))
+
+    candidates = [u for u in all_urls if is_delft_city(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "PSG Wonen koop: %d Delft koop candidates, %d new",
+        len(candidates),
+        len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("PSG Wonen koop: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_prinsenstad_koop_listing(url, body)
+        except Exception as exc:
+            log.warning("PSG Wonen koop: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("PSG Wonen koop: %d available koop match(es)", len(houses))
+    return houses
+
+
 # StealthyFetcher-backed sites (Cloudflare / heavy JS). Each entry is
 # (name, url, parser); the parser receives a rendered page.
 SITES = [
@@ -1160,6 +1620,11 @@ CUSTOM_SITES = [
     ("Prinsenstad Makelaardij", scrape_prinsenstad_sales),
     ("Olsthoorn Makelaars", scrape_olsthoorn_sales),
     ("Van Silfhout Makelaars", scrape_vansilfhout_sales),
+    ("De Bruyn en Tak koop", scrape_debruynentak_sales),
+    ("Van Gulden Makelaardij koop", scrape_vangulden_sales),
+    ("Frisia Makelaars koop", scrape_frisia_sales),
+    ("Marloes Makelaars koop", scrape_marloes_sales),
+    ("PSG Wonen koop", scrape_psgwonen_sales),
 ]
 
 

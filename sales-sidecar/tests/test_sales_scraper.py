@@ -784,6 +784,60 @@ VANSILFHOUT_TEMPLATE_HTML = """
 """
 
 
+# ---------------------------------------------------------------------------
+# De Bruyn en Tak koop
+# ---------------------------------------------------------------------------
+
+DEBRUYNENTAK_KOOP_HTML = """
+<div class="objectList">
+  <div class="item">
+    <div class="label">Beschikbaar</div>
+    <div class="itemContent">
+      <a href="https://www.debruynentak.nl/voorstraat-1.html"
+         class="itemTitel">
+        <span class="objectTitel">Voorstraat 1</span>
+        <span class="itemSubtitel">Delft</span>
+      </a>
+      <span class="itemSpecs">3 kamer appartement, 72 m²</span>
+      <div class="itemPrice">
+        <span class="currency">&euro;</span>
+        <span class="price">265.000,-</span>
+        <span class="priceSuffix">k.k.</span>
+      </div>
+    </div>
+  </div>
+  <div class="item">
+    <div class="label red">Verkocht</div>
+    <div class="itemContent">
+      <a href="https://www.debruynentak.nl/achterstraat-9.html"
+         class="itemTitel">
+        <span class="objectTitel">Achterstraat 9</span>
+        <span class="itemSubtitel">Delft</span>
+      </a>
+      <span class="itemSpecs">4 kamer appartement, 97 m²</span>
+      <div class="itemPrice">
+        <span class="price">319.000,-</span>
+      </div>
+    </div>
+  </div>
+  <div class="item">
+    <div class="label">Beschikbaar</div>
+    <div class="itemContent">
+      <a href="https://www.debruynentak.nl/kerkstraat-5.html"
+         class="itemTitel">
+        <span class="objectTitel">Kerkstraat 5</span>
+        <span class="itemSubtitel">Voorburg</span>
+      </a>
+      <span class="itemSpecs">5 kamer woonhuis, 120 m²</span>
+      <div class="itemPrice">
+        <span class="price">450.000,-</span>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+
+
 def test_vansilfhout_card_available_delft_parsed():
     page = _adaptor(
         VANSILFHOUT_TEMPLATE_HTML, "https://www.vansilfhout.nl/woningaanbod/"
@@ -841,3 +895,293 @@ def test_scrape_vansilfhout_sales_paginates_across_facetwp_pages(monkeypatch):
         "Voorstraat 1",
         "Achterstraat 9",
     }
+
+
+# ---------------------------------------------------------------------------
+# De Bruyn en Tak koop
+# ---------------------------------------------------------------------------
+
+
+def test_debruynentak_koop_parses_available_delft(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: DEBRUYNENTAK_KOOP_HTML.encode()
+    )
+    houses = s.scrape_debruynentak_sales(set())
+    assert len(houses) == 1
+    h = houses[0]
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert "265.000" in h["vraagprijs"]
+    assert h["kamers"] == "3 kamers"
+    assert h["oppervlakte"] == "72 m²"
+
+
+def test_debruynentak_koop_skips_verkocht(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: DEBRUYNENTAK_KOOP_HTML.encode()
+    )
+    houses = s.scrape_debruynentak_sales(set())
+    urls = {h["url"] for h in houses}
+    assert "https://www.debruynentak.nl/achterstraat-9.html" not in urls
+
+
+def test_debruynentak_koop_skips_non_delft(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: DEBRUYNENTAK_KOOP_HTML.encode()
+    )
+    houses = s.scrape_debruynentak_sales(set())
+    cities = {h["plaats"] for h in houses}
+    assert "Voorburg" not in cities
+
+
+# ---------------------------------------------------------------------------
+# Van Gulden Makelaardij koop
+# ---------------------------------------------------------------------------
+
+VANGULDEN_KOOP_HTML = """
+<div>
+  <a href="https://vanguldenmakelaardij.nl/aanbod-detail/woningaanbod/delft/bestaande-woning/23481-voorstraat-1/">
+    <div class="titel">Voorstraat 1</div>
+    <p class="notranslate">Delft</p>
+    <div class="price">&euro; 239.000,- k.k.</div>
+    <div class="kenmerk">
+      <img alt="woonoppervlakte_icon" />55 m²
+    </div>
+    <div class="kenmerk">
+      <img alt="kamers_icon" />2
+    </div>
+  </a>
+  <a href="https://vanguldenmakelaardij.nl/aanbod-detail/woningaanbod/rijswijk/bestaande-woning/22663-kerkstraat-5/">
+    <div class="titel">Kerkstraat 5</div>
+    <p class="notranslate">Rijswijk</p>
+    <div class="price">&euro; 239.000,- k.k.</div>
+  </a>
+  <a href="https://vanguldenmakelaardij.nl/aanbod-detail/woningaanbod/delft/bestaande-woning/99999-huurhuis/">
+    <div class="titel">Huurhuis 1</div>
+    <p class="notranslate">Delft</p>
+    <div class="price">&euro; 1.200,- per maand</div>
+  </a>
+</div>
+"""
+
+
+def test_vangulden_koop_parses_delft_koop(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: VANGULDEN_KOOP_HTML.encode()
+    )
+    houses = s.scrape_vangulden_sales(set())
+    assert len(houses) == 1
+    h = houses[0]
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert "239.000" in h["vraagprijs"]
+    assert h["oppervlakte"] == "55 m²"
+    assert h["kamers"] == "2"
+
+
+def test_vangulden_koop_skips_huur(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: VANGULDEN_KOOP_HTML.encode()
+    )
+    houses = s.scrape_vangulden_sales(set())
+    addrs = {h["straatnaamHuisnummer"] for h in houses}
+    assert "Huurhuis 1" not in addrs
+
+
+def test_vangulden_koop_skips_non_delft(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: VANGULDEN_KOOP_HTML.encode()
+    )
+    houses = s.scrape_vangulden_sales(set())
+    cities = {h["plaats"] for h in houses}
+    assert "Rijswijk" not in cities
+
+
+# ---------------------------------------------------------------------------
+# Frisia Makelaars koop (sitemap + detail pages)
+# ---------------------------------------------------------------------------
+
+FRISIA_KOOP_DETAIL = """
+<html><body>
+  <h1>Voorstraat 1 , 2611 AB, Delft</h1>
+  <div class="panel__block__feature">Vraagprijs | &euro; 260.000,- k.k.</div>
+  <div class="panel__block__feature">Status | Beschikbaar</div>
+  <section class="section--intro__list">
+    <ul>
+      <li><i class="icon-livearea"></i>72 m²</li>
+      <li><i class="icon-bedroom"></i>2</li>
+    </ul>
+  </section>
+</body></html>
+"""
+
+FRISIA_RENT_DETAIL = """
+<html><body>
+  <h1>Achterstraat 9 , 2611 CD, Delft</h1>
+  <div class="panel__block__feature">Huurprijs | &euro; 1.200 p.m.</div>
+</body></html>
+"""
+
+
+def test_frisia_koop_detail_parsed():
+    pytest.importorskip("scrapling.parser")
+    h = s._parse_frisia_koop_listing(
+        "https://frisiamakelaars.nl/wonen/aanbod/voorstraat-1-delft-x",
+        FRISIA_KOOP_DETAIL.encode(),
+    )
+    assert h is not None
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert "260.000" in h["vraagprijs"]
+    assert h["oppervlakte"] == "72 m²"
+
+
+def test_frisia_koop_skips_rental():
+    pytest.importorskip("scrapling.parser")
+    h = s._parse_frisia_koop_listing(
+        "https://frisiamakelaars.nl/wonen/aanbod/achterstraat-9-delft-y",
+        FRISIA_RENT_DETAIL.encode(),
+    )
+    assert h is None
+
+
+FRISIA_KOOP_SOLD_DETAIL = """
+<html><body>
+  <h1>Markt 3 , 2611 AB, Delft</h1>
+  <div class="panel__block__feature">Vraagprijs | &euro; 250.000,- k.k.</div>
+  <div class="panel__block__feature">Status | Verkocht onder voorbehoud</div>
+</body></html>
+"""
+
+
+def test_frisia_koop_skips_sold():
+    pytest.importorskip("scrapling.parser")
+    h = s._parse_frisia_koop_listing(
+        "https://frisiamakelaars.nl/wonen/aanbod/markt-3-delft-z",
+        FRISIA_KOOP_SOLD_DETAIL.encode(),
+    )
+    assert h is None
+
+
+# ---------------------------------------------------------------------------
+# Marloes Makelaars koop (sitemap + detail pages)
+# ---------------------------------------------------------------------------
+
+MARLOES_KOOP_DETAIL = """
+<html><head><title>Voorstraat 1 te Delft | Marloes Makelaars</title></head>
+<body>
+  <dl>
+    <dt>Prijs</dt><dd>&euro; 265.000,- k.k.</dd>
+    <dt>Plaats</dt><dd>Delft</dd>
+    <dt>Oppervlakte</dt><dd>43 m²</dd>
+    <dt>Slaapkamers</dt><dd>1</dd>
+    <dt>Status</dt><dd>Beschikbaar</dd>
+  </dl>
+</body></html>
+"""
+
+MARLOES_RENT_DETAIL = """
+<html><head><title>Achterstraat 9 te Delft | Marloes Makelaars</title></head>
+<body>
+  <dl>
+    <dt>Prijs</dt><dd>&euro; 1.200,- per maand</dd>
+    <dt>Plaats</dt><dd>Delft</dd>
+  </dl>
+</body></html>
+"""
+
+
+def test_marloes_koop_detail_parsed():
+    pytest.importorskip("scrapling.parser")
+    h = s._parse_marloes_koop_listing(
+        "https://www.marloesmakelaars.nl/woning/voorstraat-1-te-delft/",
+        MARLOES_KOOP_DETAIL.encode(),
+    )
+    assert h is not None
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert "265.000" in h["vraagprijs"]
+    assert h["oppervlakte"] == "43 m²"
+    assert h["kamers"] == "2 kamers"
+
+
+def test_marloes_koop_skips_rental():
+    pytest.importorskip("scrapling.parser")
+    h = s._parse_marloes_koop_listing(
+        "https://www.marloesmakelaars.nl/woning/achterstraat-9-te-delft/",
+        MARLOES_RENT_DETAIL.encode(),
+    )
+    assert h is None
+
+
+MARLOES_SOLD_DETAIL = """
+<html><head><title>Markt 3 te Delft | Marloes Makelaars</title></head>
+<body>
+  <dl>
+    <dt>Prijs</dt><dd>&euro; 250.000,- k.k.</dd>
+    <dt>Plaats</dt><dd>Delft</dd>
+    <dt>Status</dt><dd>Verkocht</dd>
+  </dl>
+</body></html>
+"""
+
+
+def test_marloes_koop_skips_sold():
+    pytest.importorskip("scrapling.parser")
+    h = s._parse_marloes_koop_listing(
+        "https://www.marloesmakelaars.nl/woning/markt-3-te-delft/",
+        MARLOES_SOLD_DETAIL.encode(),
+    )
+    assert h is None
+
+
+# ---------------------------------------------------------------------------
+# PSG Wonen koop (Hayweb sale sitemap — reuses Prinsenstad parser)
+# ---------------------------------------------------------------------------
+
+
+def test_psgwonen_koop_uses_prinsenstad_parser():
+    pytest.importorskip("scrapling.parser")
+    body = _prinsenstad_detail(
+        "Beschikbaar", "Te koop: Landelaan 15F104, 2282 GD Rijswijk"
+    )
+    h = s._parse_prinsenstad_koop_listing(
+        "https://www.psg-wonen.nl/woningaanbod/koop/rijswijk/landelaan/15f104",
+        body,
+    )
+    assert h is not None
+    assert h["straatnaamHuisnummer"] == "Landelaan 15F104"
+    assert h["plaats"] == "Rijswijk"
+
+
+PSGWONEN_SALE_SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.psg-wonen.nl/woningaanbod/koop/delft/voorstraat/1</loc></url>
+  <url><loc>https://www.psg-wonen.nl/woningaanbod/koop/rijswijk/kerkstraat/5</loc></url>
+  <url><loc>https://www.psg-wonen.nl/woningaanbod/koop/rijswijk/type-appartement</loc></url>
+</urlset>
+"""
+
+
+def test_psgwonen_koop_filters_delft_from_sitemap(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    detail_body = _prinsenstad_detail(
+        "Beschikbaar", "Te koop: Voorstraat 1, 2611 AB Delft"
+    )
+
+    def fake_http_get(url, timeout=30):
+        if url == s.PSGWONEN_SALE_SITEMAP_URL:
+            return PSGWONEN_SALE_SITEMAP.encode()
+        return detail_body
+
+    monkeypatch.setattr(s, "_http_get", fake_http_get)
+    houses = s.scrape_psgwonen_sales(set())
+    assert len(houses) == 1
+    assert houses[0]["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert houses[0]["plaats"] == "Delft"
