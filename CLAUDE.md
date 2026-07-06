@@ -18,10 +18,10 @@ Key env vars: `DB_PATH`, `DATA_DIR`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, 
 
 ## Sales Sidecar (koop in Delft)
 
-Standalone Scrapling scraper in `sales-sidecar/`. Docker service name: `sales-scraper`. Scrapes apartments **for sale** (koop) in the city of Delft priced ≤ €270.000 with ≥ 2 kamers across 10 sources and notifies a dedicated Telegram group directly (no responder involvement). Two fetch paths:
+Standalone Scrapling scraper in `sales-sidecar/`. Docker service name: `sales-scraper`. Scrapes apartments **for sale** (koop) in the city of Delft priced ≤ €270.000 with ≥ 2 kamers across 12 sources and notifies a dedicated Telegram group directly (no responder involvement). Two fetch paths:
 
 - **`SITES`** (StealthyFetcher → parser): Funda koop, Pararius koop — Cloudflare / heavy-JS pages.
-- **`CUSTOM_SITES`** (plain HTTP, `(existing_urls) -> list[house]`): Van Daal & Björnd (realtime-listings JSON feed, filtered to `isSales` + `statusOrig == "available"`); ZO Makelaars, VW Makelaars, Roepman, MORRIS, Hof van Delft (RealWorks list pages — plain HTTP returns the full server-rendered DOM, which also fixes ZO whose StealthyFetcher-rendered cards collapse to empty "Bewaar deze woning" widgets); Prinsenstad Makelaardij (Hayweb `sitemap_listings_res_sale.xml` → per-listing detail, skipping Verkocht / Onder bod).
+- **`CUSTOM_SITES`** (plain HTTP, `(existing_urls) -> list[house]`): Van Daal & Björnd (realtime-listings JSON feed, filtered to `isSales` + `statusOrig == "available"`); ZO Makelaars, VW Makelaars, Roepman, MORRIS, Hof van Delft (RealWorks list pages — plain HTTP returns the full server-rendered DOM, which also fixes ZO whose StealthyFetcher-rendered cards collapse to empty "Bewaar deze woning" widgets); Prinsenstad Makelaardij (Hayweb `sitemap_listings_res_sale.xml` → per-listing detail, skipping Verkocht / Onder bod); Olsthoorn Makelaars (custom WordPress "Sure" plugin `/wonen/` grid, paginated until an empty page, city filtered client-side); Van Silfhout Makelaars (WordPress + FacetWP `/woningaanbod/` grid, paginated via FacetWP's `wp-json/facetwp/v1/refresh` REST endpoint with facets pinned to `status=te-koop` + `locaties=delft` so filtering happens server-side).
 
 Fetch infra (retry-once + self-restart watchdog) and the StealthyFetcher parsers are ported from `python-sidecar/scraper.py`; notification helpers from `responder/tg.py`. The RealWorks parser uses an inverted status gate (keep koop, skip `/huur/` and `/verkocht/`).
 

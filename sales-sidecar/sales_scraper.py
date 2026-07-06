@@ -116,6 +116,14 @@ OLSTHOORN_BASE = "https://www.olsthoornmakelaars.nl"
 OLSTHOORN_WONEN_URL = f"{OLSTHOORN_BASE}/wonen/"
 OLSTHOORN_WONEN_PAGE_URL = f"{OLSTHOORN_BASE}/wonen/page/{{page}}/"
 
+# Van Silfhout Makelaars (WordPress + FacetWP). The /woningaanbod/ archive's
+# first page is server-rendered, but later pages only exist behind FacetWP's
+# REST refresh endpoint — called directly over plain HTTP with facets pinned
+# to status=te-koop and locaties=delft so the koop/city filtering happens
+# server-side and every returned card is already in scope.
+VANSILFHOUT_BASE = "https://www.vansilfhout.nl"
+VANSILFHOUT_REFRESH_URL = f"{VANSILFHOUT_BASE}/wp-json/facetwp/v1/refresh"
+
 _SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # ---------------------------------------------------------------------------
@@ -994,6 +1002,142 @@ def scrape_olsthoorn_sales(existing_urls: set[str]) -> list[dict[str, str]]:
     return houses
 
 
+# ---------------------------------------------------------------------------
+# Van Silfhout Makelaars koop grid (WordPress + FacetWP REST refresh)
+# ---------------------------------------------------------------------------
+# FacetWP's JS builds a JSON POST to wp-json/facetwp/v1/refresh with the
+# active facet selections; replicated here with facets pinned to koop+Delft.
+# `first_load: 0` is required — with `first_load: 1` (the value the initial
+# page load itself uses) the endpoint filters correctly but returns an empty
+# `template` string. Each card's bare "Kamers" number is already the total
+# kamers count (cross-checked against a detail page's separate "Slaapkamers"
+# row), so no bedrooms conversion is needed.
+
+
+def _facetwp_refresh(paged: int) -> dict:
+    payload = {
+        "action": "facetwp_refresh",
+        "data": {
+            "facets": {
+                "status": ["te-koop"],
+                "locaties": ["delft"],
+                "aanbod": [],
+                "aanbod_categorien": [],
+                "koopprijs": [],
+                "huurprijs": [],
+                "oppervlakte": [],
+                "perceel": [],
+                "kamers": [],
+            },
+            "frozen_facets": {},
+            "http_params": {"get": [], "uri": "woningaanbod", "url_vars": []},
+            "template": "aanbod",
+            "extras": {"sort": "default"},
+            "soft_refresh": 0,
+            "is_bfcache": 0,
+            "first_load": 0,
+            "paged": paged,
+        },
+    }
+    req = urllib.request.Request(
+        VANSILFHOUT_REFRESH_URL,
+        data=json.dumps(payload).encode(),
+        headers={"User-Agent": _PLAIN_HTTP_UA, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def _parse_vansilfhout_card(card) -> dict[str, str] | None:
+    link_els = card.css("a.straatnaamwoonplaats")
+    if not link_els:
+        return None
+    href = link_els[0].attrib.get("href", "")
+    if not href:
+        return None
+    url = make_absolute(href, VANSILFHOUT_BASE)
+
+    address = _first_text(card, "h2.objecttitle")
+    city = _first_text(card, "a.straatnaamwoonplaats span")
+    if city and not is_delft_city(city):
+        return None
+
+    price = ""
+    area = ""
+    rooms = ""
+    for li in card.css("ul.shortSpecs li"):
+        text = re.sub(r"\s+", " ", li.get_all_text() or "").strip()
+        label, _, value = text.partition(":")
+        label = label.strip().lower()
+        value = value.strip()
+        if label == "vraagprijs":
+            price = value
+        elif label == "oppervlakte":
+            m = re.search(r"(\d+)\s*m", value)
+            area = f"{m.group(1)} m²" if m else value
+        elif label == "kamers":
+            m = re.match(r"(\d+)", value)
+            if m:
+                n = int(m.group(1))
+                rooms = "1 kamer" if n == 1 else f"{n} kamers"
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_vansilfhout_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    """Fetch Van Silfhout Makelaars' koop grid via FacetWP's REST refresh
+    endpoint, with facets pinned to status=te-koop and locaties=delft.
+    """
+    from scrapling.parser import Adaptor
+
+    houses: list[dict[str, str]] = []
+    try:
+        data = _facetwp_refresh(1)
+    except Exception as exc:
+        log.warning("Van Silfhout Makelaars: fetch failed: %s", exc)
+        return []
+
+    total_pages = data.get("settings", {}).get("pager", {}).get("total_pages", 1)
+
+    for page_num in range(1, total_pages + 1):
+        if page_num > 1:
+            try:
+                data = _facetwp_refresh(page_num)
+            except Exception as exc:
+                log.warning(
+                    "Van Silfhout Makelaars: page %d fetch failed: %s", page_num, exc
+                )
+                break
+        template = data.get("template", "")
+        if not template:
+            break
+        page = Adaptor(
+            content=template.encode(), url=f"{VANSILFHOUT_BASE}/woningaanbod/"
+        )
+        for card in page.css(".objectcontainer"):
+            try:
+                house = _parse_vansilfhout_card(card)
+            except Exception as exc:
+                log.warning(
+                    "Van Silfhout Makelaars: failed to parse a listing: %s", exc
+                )
+                continue
+            if house is not None:
+                houses.append(house)
+
+    log.info(
+        "Van Silfhout Makelaars: %d Delft koop candidate(s) across pages", len(houses)
+    )
+    return houses
+
+
 # StealthyFetcher-backed sites (Cloudflare / heavy JS). Each entry is
 # (name, url, parser); the parser receives a rendered page.
 SITES = [
@@ -1015,6 +1159,7 @@ CUSTOM_SITES = [
     ("Hof van Delft", scrape_hofvandelft_sales),
     ("Prinsenstad Makelaardij", scrape_prinsenstad_sales),
     ("Olsthoorn Makelaars", scrape_olsthoorn_sales),
+    ("Van Silfhout Makelaars", scrape_vansilfhout_sales),
 ]
 
 
