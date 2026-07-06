@@ -21,7 +21,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Add site with Claude
+      - name: Add rental site with Claude
+        if: ${{ !contains(github.event.issue.labels.*.name, 'sales') }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -59,3 +60,51 @@ jobs:
                blocked, requires login, no parseable listings), do not open a
                PR; instead comment on the issue explaining exactly what is
                blocking.
+      - name: Add sales (koop) site with Claude
+        if: ${{ contains(github.event.issue.labels.*.name, 'sales') }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash,Read,Edit,Write,Glob,Grep,WebFetch"'
+          prompt: |
+            You are adding a new for-sale (koop) site to the sales-sidecar
+            scraper, NOT the rental python-sidecar.
+
+            Issue #${{ github.event.issue.number }}: "${{ github.event.issue.title }}"
+            Issue body:
+            ${{ github.event.issue.body }}
+
+            Target: sales-sidecar/sales_scraper.py (Docker service
+            `sales-scraper`). It scrapes apartments FOR SALE (koop) in the city
+            of Delft, priced <= EUR 270.000 with >= 2 kamers, and drops
+            non-dwellings via a junk filter.
+
+            Steps:
+            1. Extract the example listing URL from the issue body and determine
+               the site's domain.
+            2. Read sales-sidecar/sales_scraper.py to learn its structure. Add
+               the new source there, preferring the plain-HTTP path:
+               a. If the site exposes a realtime-listings JSON feed or a
+                  server-rendered RealWorks/Hayweb DOM, add it to CUSTOM_SITES
+                  as an `(existing_urls) -> list[house]` function using plain
+                  HTTP (urllib/requests). Filter to koop listings in Delft,
+                  price <= 270000, status available (skip Verkocht / Onder bod).
+               b. Only fall back to the SITES list (StealthyFetcher -> parser)
+                  for Cloudflare / heavy-JS pages that plain HTTP can't render.
+            3. Follow the room-semantics convention used in the file: normalise
+               every source to TOTAL kamers before the >= 2 gate. Funda-style
+               cards show slaapkamers (bedrooms) -> add the living room back
+               (bedrooms + 1); a JSON feed's `rooms` field is total kamers;
+               RealWorks "Aantal kamers N" is total kamers; "N (waarvan M
+               slaapkamers)" -> N. Apply the price gate and the junk filter
+               (parkeerplaats/garagebox/berging/kavel/opslag etc.).
+            4. Add or extend tests under sales-sidecar/tests and run them with
+               pytest. Verify selectors against the real site where feasible.
+            5. Create a branch named claude/add-site-<domain>, commit, push, and
+               open a pull request titled "Add site: <domain>" that states the
+               site was added to the sales-sidecar.
+            6. Comment on issue #${{ github.event.issue.number }} with a link to
+               the PR, mentioning it was added to the sales-sidecar. If the site
+               cannot be scraped (blocked, login required, no parseable koop
+               listings), do not open a PR; instead comment explaining exactly
+               what is blocking.
