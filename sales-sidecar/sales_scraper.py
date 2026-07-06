@@ -108,6 +108,14 @@ PRINSENSTAD_SALE_SITEMAP_URL = (
     "https://prinsenstadmakelaardij.nl/sitemap_listings_res_sale.xml"
 )
 
+# Olsthoorn Makelaars (custom WordPress "Sure" plugin, not Realworks/Hayweb).
+# The /wonen/ grid has no server-side city/type filter reachable over plain
+# HTTP — its search form posts to a JS-driven endpoint — so every paginated
+# page is fetched and Delft is filtered client-side from each card.
+OLSTHOORN_BASE = "https://www.olsthoornmakelaars.nl"
+OLSTHOORN_WONEN_URL = f"{OLSTHOORN_BASE}/wonen/"
+OLSTHOORN_WONEN_PAGE_URL = f"{OLSTHOORN_BASE}/wonen/page/{{page}}/"
+
 _SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # ---------------------------------------------------------------------------
@@ -883,6 +891,109 @@ def scrape_prinsenstad_sales(existing_urls: set[str]) -> list[dict[str, str]]:
     return houses
 
 
+# ---------------------------------------------------------------------------
+# Olsthoorn Makelaars koop grid (custom WordPress "Sure" plugin)
+# ---------------------------------------------------------------------------
+# Every card on /wonen/{,page/N/} shows "&euro; ... k.k." (koop-only pricing;
+# no huur listing was observed on any of the 20 sampled pages) plus a single
+# status badge: reuse the Prinsenstad sold/onder-bod gate to skip Verkocht /
+# Onder bod / Verkocht onder voorbehoud and keep Beschikbaar / Open huis.
+
+
+def _parse_olsthoorn_card(card) -> dict[str, str] | None:
+    href = card.attrib.get("href", "")
+    if not href:
+        return None
+    url = make_absolute(href, OLSTHOORN_BASE)
+
+    status = _first_text(card, ".card-house__status .card-house__label")
+    if _SOLD_STATUS_RE.search(status):
+        return None
+
+    city = _first_text(card, "h2.card__title")
+    if city and not is_delft_city(city):
+        return None
+
+    # The address (plain <p>) and price (<p><b>...) are the only two direct
+    # <p> children of .short--info — distinguish by the <b> wrapper.
+    address = ""
+    price = ""
+    for p in card.css(".short--info > p"):
+        text = re.sub(r"\s+", " ", p.get_all_text() or "").strip()
+        if p.css("b"):
+            price = text
+        else:
+            address = text
+
+    # Area/rooms icons wrap their number in a nested <sup> (e.g. "76 m<sup>2
+    # </sup>"), which get_all_text() joins with a stray space ("76 m 2") — so
+    # area is rebuilt from the leading digits instead of used verbatim.
+    area = ""
+    rooms = ""
+    for data_div in card.css(".data--short .data"):
+        icon = data_div.css("i")
+        icon_class = icon[0].attrib.get("class", "") if icon else ""
+        text = re.sub(r"\s+", " ", data_div.get_all_text() or "").strip()
+        if "icon-sizes" in icon_class:
+            m = re.match(r"(\d+)", text)
+            area = f"{m.group(1)} m²" if m else text
+        elif "icon-door" in icon_class:
+            # Cross-checked against detail pages: the card's door-icon number
+            # already is total kamers (e.g. card "5 kamers" == detail page's
+            # "Kamers: 5 (waarvan 4 slaapkamers)"), so no bedrooms conversion.
+            rooms = text
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_olsthoorn_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    """Fetch every page of Olsthoorn Makelaars' /wonen/ koop grid over plain
+    HTTP and return the Delft, available candidates.
+
+    There's no reachable server-side filter, so pagination continues until a
+    page returns zero cards at all (not zero Delft matches).
+    """
+    from scrapling.parser import Adaptor
+
+    houses: list[dict[str, str]] = []
+    max_pages = 25
+    for page_num in range(1, max_pages + 1):
+        url = (
+            OLSTHOORN_WONEN_URL
+            if page_num == 1
+            else OLSTHOORN_WONEN_PAGE_URL.format(page=page_num)
+        )
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning(
+                "Olsthoorn Makelaars: fetch failed for page %d: %s", page_num, exc
+            )
+            break
+        page = Adaptor(content=body, url=url)
+        cards = page.css("a.card-house")
+        if not cards:
+            break
+        for card in cards:
+            try:
+                house = _parse_olsthoorn_card(card)
+            except Exception as exc:
+                log.warning("Olsthoorn Makelaars: failed to parse a listing: %s", exc)
+                continue
+            if house is not None:
+                houses.append(house)
+
+    log.info("Olsthoorn Makelaars: %d Delft koop candidate(s) across pages", len(houses))
+    return houses
+
+
 # StealthyFetcher-backed sites (Cloudflare / heavy JS). Each entry is
 # (name, url, parser); the parser receives a rendered page.
 SITES = [
@@ -903,6 +1014,7 @@ CUSTOM_SITES = [
     ("MORRIS Makelaardij", scrape_morris_sales),
     ("Hof van Delft", scrape_hofvandelft_sales),
     ("Prinsenstad Makelaardij", scrape_prinsenstad_sales),
+    ("Olsthoorn Makelaars", scrape_olsthoorn_sales),
 ]
 
 

@@ -564,3 +564,145 @@ def test_prinsenstad_koop_sold_skipped():
         body,
     )
     assert h is None
+
+
+# ---------------------------------------------------------------------------
+# Olsthoorn Makelaars koop grid (custom WordPress "Sure" plugin)
+# ---------------------------------------------------------------------------
+# Cards nest the m² digit in a <sup>, and total kamers is already the door-icon
+# number (cross-checked against a real detail page's "N (waarvan M
+# slaapkamers)" — no bedrooms_to_kamers conversion needed here).
+
+OLSTHOORN_GRID_HTML = """
+<div class="section--houses">
+  <div class="house--col">
+    <a href="https://www.olsthoornmakelaars.nl/wonen/object/voorstraat-1-delft/"
+       class="card-house">
+      <div class="card-house__thumb">
+        <div class="card-house__status">
+          <span class="card-house__label badge-available">Beschikbaar</span>
+        </div>
+      </div>
+      <div class="short--info">
+        <h2 class="h5 card__title">Delft</h2>
+        <p>Voorstraat
+          1
+        </p>
+        <p><b>&euro;
+          250.000
+          k.k.</b></p>
+        <div class="data--short">
+          <div class="data">
+            <span class="icon"><i class="icon-sizes"></i></span>
+            <span class="date__inner">80 m<sup>2</sup></span>
+          </div>
+          <div class="data">
+            <span class="icon"><i class="icon-door"></i></span>
+            <span class="date__inner">3
+              kamers</span>
+          </div>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="house--col">
+    <a href="https://www.olsthoornmakelaars.nl/wonen/object/achterstraat-9-delft/"
+       class="card-house">
+      <div class="card-house__thumb">
+        <div class="card-house__status">
+          <span class="card-house__label badge-sold">Verkocht</span>
+        </div>
+      </div>
+      <div class="short--info">
+        <h2 class="h5 card__title">Delft</h2>
+        <p>Achterstraat 9</p>
+        <p><b>&euro; 260.000 k.k.</b></p>
+      </div>
+    </a>
+  </div>
+  <div class="house--col">
+    <a href="https://www.olsthoornmakelaars.nl/wonen/object/dorpsstraat-3-onder-bod/"
+       class="card-house">
+      <div class="card-house__thumb">
+        <div class="card-house__status">
+          <span class="card-house__label badge">Onder bod</span>
+        </div>
+      </div>
+      <div class="short--info">
+        <h2 class="h5 card__title">Delft</h2>
+        <p>Dorpsstraat 3</p>
+        <p><b>&euro; 240.000 k.k.</b></p>
+      </div>
+    </a>
+  </div>
+  <div class="house--col">
+    <a href="https://www.olsthoornmakelaars.nl/wonen/object/kerkstraat-2-rijswijk/"
+       class="card-house">
+      <div class="card-house__thumb">
+        <div class="card-house__status">
+          <span class="card-house__label badge-available">Beschikbaar</span>
+        </div>
+      </div>
+      <div class="short--info">
+        <h2 class="h5 card__title">Rijswijk</h2>
+        <p>Kerkstraat 2</p>
+        <p><b>&euro; 230.000 k.k.</b></p>
+      </div>
+    </a>
+  </div>
+</div>
+"""
+
+
+def test_olsthoorn_card_available_delft_parsed():
+    page = _adaptor(OLSTHOORN_GRID_HTML, "https://www.olsthoornmakelaars.nl/wonen/")
+    card = page.css("a.card-house")[0]
+    h = s._parse_olsthoorn_card(card)
+    assert h is not None
+    assert h["url"] == (
+        "https://www.olsthoornmakelaars.nl/wonen/object/voorstraat-1-delft/"
+    )
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert "250.000" in h["vraagprijs"]
+    assert h["kamers"] == "3 kamers"
+    assert h["oppervlakte"] == "80 m²"  # nested <sup>2</sup> rebuilt, not "80 m 2"
+    assert s.passes_filters(h) is True
+
+
+def test_olsthoorn_card_sold_and_onder_bod_skipped():
+    page = _adaptor(OLSTHOORN_GRID_HTML, "https://www.olsthoornmakelaars.nl/wonen/")
+    cards = page.css("a.card-house")
+    assert s._parse_olsthoorn_card(cards[1]) is None  # Verkocht
+    assert s._parse_olsthoorn_card(cards[2]) is None  # Onder bod
+
+
+def test_olsthoorn_card_non_delft_skipped():
+    page = _adaptor(OLSTHOORN_GRID_HTML, "https://www.olsthoornmakelaars.nl/wonen/")
+    card = page.css("a.card-house")[3]
+    assert s._parse_olsthoorn_card(card) is None  # Rijswijk
+
+
+EMPTY_GRID_HTML = '<div class="section--houses"></div>'
+
+
+def test_scrape_olsthoorn_sales_paginates_until_empty(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    fetched_urls = []
+
+    def fake_http_get(url, timeout=30):
+        fetched_urls.append(url)
+        if url == s.OLSTHOORN_WONEN_URL:
+            return OLSTHOORN_GRID_HTML.encode()
+        return EMPTY_GRID_HTML.encode()
+
+    monkeypatch.setattr(s, "_http_get", fake_http_get)
+    houses = s.scrape_olsthoorn_sales(set())
+
+    assert len(houses) == 1
+    assert houses[0]["straatnaamHuisnummer"] == "Voorstraat 1"
+    # Stops at the first empty page instead of crawling all 25.
+    assert fetched_urls == [
+        s.OLSTHOORN_WONEN_URL,
+        s.OLSTHOORN_WONEN_PAGE_URL.format(page=2),
+    ]
