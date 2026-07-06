@@ -13,10 +13,23 @@ from pathlib import Path
 from scrapling.fetchers import StealthyFetcher
 from scrapling.parser import Adaptor
 
-FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
+# Cloudflare-turnstile sites (Funda, Pactum, VW Makelaars) need ~127s for the
+# challenge to solve — measured warm and cold, both ~127.5s, so this is steady
+# turnstile latency, not a cold-start effect. A 120s budget cuts them off ~7s
+# before they return HTTP 200, turning a slow success into a timeout that
+# wedges the single-worker fetch pool (and cascades into the wedge guard).
+# 200s clears the observed latency with margin.
+FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "200"))
 MAX_CONSECUTIVE_FETCH_FAILURES = int(
     os.environ.get("MAX_CONSECUTIVE_FETCH_FAILURES", "3")
 )
+# Set True once the first scrape cycle since (re)start finishes. Until then the
+# wedge guard skips-and-continues instead of self-restarting: a container that
+# trips the guard before completing a single cycle would exit and restart into
+# the same conditions, looping forever without ever producing a result. The
+# grace lets the first cycle finish so steady-state wedge detection only kicks
+# in once we've proven the browser can complete a full pass.
+_first_cycle_complete = False
 TIMEOUT_ALERT_THROTTLE_SECONDS = int(
     os.environ.get("TIMEOUT_ALERT_THROTTLE_SECONDS", str(6 * 3600))
 )
@@ -2751,27 +2764,40 @@ def _record_fetch_failure(url: str, reason: str) -> None:
         return
     _failed_urls_in_streak.add(url)
     _consecutive_fetch_failures += 1
-    if _consecutive_fetch_failures >= MAX_CONSECUTIVE_FETCH_FAILURES:
-        msg = (
-            f"{_consecutive_fetch_failures} consecutive fetch failures "
-            f"(last: {reason}). Browser likely wedged — exiting so Docker "
-            f"restarts the container."
+    if _consecutive_fetch_failures < MAX_CONSECUTIVE_FETCH_FAILURES:
+        return
+    if not _first_cycle_complete:
+        # First-cycle grace: skip-and-continue instead of self-restarting so
+        # the opening cycle can finish. The fast worker-stuck probe keeps the
+        # remaining sites quick. Exiting before completing one cycle would
+        # restart into the same conditions — a permanent crash-loop.
+        log.warning(
+            "%d consecutive fetch failures (last: %s) during the first cycle "
+            "since startup — skipping instead of self-restarting until one "
+            "cycle completes.",
+            _consecutive_fetch_failures, reason,
         )
-        log.critical(msg)
-        try:
-            send_telegram_alert(f"♻️ <b>Sidecar self-restart</b> — {msg}")
-        except Exception:
-            log.exception("Failed to send self-restart Telegram alert")
-        try:
-            SELF_RESTART_MARKER.parent.mkdir(parents=True, exist_ok=True)
-            SELF_RESTART_MARKER.write_text(reason)
-        except Exception:
-            log.exception("Failed to write self-restart marker")
-        # Hard exit: the wedged fetch still occupies the _fetch_pool worker
-        # thread. sys.exit() would hang forever in the concurrent.futures
-        # atexit handler joining that thread, so the process never dies and
-        # Docker never restarts it. os._exit() skips atexit/thread-join.
-        os._exit(1)
+        return
+    msg = (
+        f"{_consecutive_fetch_failures} consecutive fetch failures "
+        f"(last: {reason}). Browser likely wedged — exiting so Docker "
+        f"restarts the container."
+    )
+    log.critical(msg)
+    try:
+        send_telegram_alert(f"♻️ <b>Sidecar self-restart</b> — {msg}")
+    except Exception:
+        log.exception("Failed to send self-restart Telegram alert")
+    try:
+        SELF_RESTART_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        SELF_RESTART_MARKER.write_text(reason)
+    except Exception:
+        log.exception("Failed to write self-restart marker")
+    # Hard exit: the wedged fetch still occupies the _fetch_pool worker
+    # thread. sys.exit() would hang forever in the concurrent.futures
+    # atexit handler joining that thread, so the process never dies and
+    # Docker never restarts it. os._exit() skips atexit/thread-join.
+    os._exit(1)
 
 
 def _scrape_paginated(name, url_template, parser, existing_urls):
@@ -2842,6 +2868,7 @@ def _persist_new_houses(conn, name, houses, existing_urls, all_new):
 
 
 def run_cycle():
+    global _first_cycle_complete
     conn = init_db()
     existing_urls = get_existing_urls(conn)
     all_new = []
@@ -2883,6 +2910,9 @@ def run_cycle():
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
     conn.close()
+    # One full cycle finished: the browser is now warm, so the wedge guard may
+    # resume self-restarting on genuine wedges from the next cycle onward.
+    _first_cycle_complete = True
     return all_new
 
 
