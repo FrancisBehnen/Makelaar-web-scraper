@@ -241,10 +241,11 @@ def _send_status(chat_id: str) -> None:
     tg.send_message(chat_id, "📊 <b>Laatste reacties</b>\n\n" + "\n".join(lines))
 
 
-def _propose_add_site(chat_id: str, url: str) -> None:
+def _propose_add_site(chat_id: str, url: str, *, sales: bool = False) -> None:
     token = str(int(time.time() * 1000))
-    db.kv_set(f"addsite:{token}", url)
+    db.kv_set(f"addsite:{token}", json.dumps({"url": url, "sales": sales}))
     domain = github_issues.domain_of(url)
+    target = "sales-sidecar (koop)" if sales else "de scraper"
     keyboard = {
         "inline_keyboard": [
             [
@@ -255,7 +256,7 @@ def _propose_add_site(chat_id: str, url: str) -> None:
     }
     tg.send_message(
         chat_id,
-        f"🆕 <b>Site toevoegen aan de scraper?</b>\n\n"
+        f"🆕 <b>Site toevoegen aan {esc(target)}?</b>\n\n"
         f"<code>{esc(domain)}</code>\n{esc(url)}\n\n"
         "Er wordt een GitHub-issue aangemaakt; Claude Code maakt daar "
         "vervolgens een PR van.",
@@ -265,8 +266,13 @@ def _propose_add_site(chat_id: str, url: str) -> None:
 
 def _handle_message(message: dict) -> None:
     chat_id = str(message.get("chat", {}).get("id", ""))
-    if chat_id not in config.TELEGRAM_CHAT_IDS:
+    is_rentals = chat_id in config.TELEGRAM_CHAT_IDS
+    is_sales = chat_id in config.TELEGRAM_SALES_CHAT_IDS
+    if not (is_rentals or is_sales):
         return
+    # A chat in both lists is treated as rentals (the contact-form flow lives
+    # there); sales chats only ever open sales-sidecar add-site issues.
+    sales = is_sales and not is_rentals
     text = (message.get("text") or "").strip()
     if not text:
         return
@@ -278,7 +284,7 @@ def _handle_message(message: dict) -> None:
         return
     match = URL_RE.search(text)
     if match:
-        _propose_add_site(chat_id, match.group(0).rstrip(".,)"))
+        _propose_add_site(chat_id, match.group(0).rstrip(".,)"), sales=sales)
 
 
 def _handle_brief(chat_id: str, message_id: int, row) -> None:
@@ -303,19 +309,25 @@ def _handle_callback(callback: dict) -> None:
     callback_id = callback["id"]
     message = callback.get("message") or {}
     chat_id = str(message.get("chat", {}).get("id", ""))
-    if chat_id not in config.TELEGRAM_CHAT_IDS:
+    if (
+        chat_id not in config.TELEGRAM_CHAT_IDS
+        and chat_id not in config.TELEGRAM_SALES_CHAT_IDS
+    ):
         tg.answer_callback(callback_id)
         return
     action, _, arg = (callback.get("data") or "").partition(":")
 
     if action == "siteok":
-        url = db.kv_get(f"addsite:{arg}")
-        if not url:
+        raw = db.kv_get(f"addsite:{arg}")
+        if not raw:
             tg.answer_callback(callback_id, "Verzoek is verlopen, stuur de URL opnieuw")
             return
+        payload = json.loads(raw)
+        url = payload["url"]
+        sales = bool(payload.get("sales", False))
         tg.answer_callback(callback_id, "Issue wordt aangemaakt…")
         try:
-            issue_url = github_issues.create_add_site_issue(url)
+            issue_url = github_issues.create_add_site_issue(url, sales=sales)
             db.kv_delete(f"addsite:{arg}")
             tg.send_message(chat_id, f"✅ Issue aangemaakt: {esc(issue_url)}")
         except Exception as exc:

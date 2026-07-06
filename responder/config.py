@@ -15,6 +15,14 @@ TELEGRAM_CHAT_IDS: list[str] = [
     for c in os.environ.get("TELEGRAM_CHAT_IDS", "").split(",")
     if c.strip()
 ]
+# For-sale ("Huisje kopen") chats. A URL sent here opens an add-site issue
+# targeting the sales-sidecar instead of the rental python-sidecar. These chats
+# never receive rental listing notifications or contact-form flows.
+TELEGRAM_SALES_CHAT_IDS: list[str] = [
+    c.strip()
+    for c in os.environ.get("TELEGRAM_SALES_CHAT_IDS", "").split(",")
+    if c.strip()
+]
 # Operational alerts; falls back to the regular chats when unset.
 TELEGRAM_ALERT_CHAT_IDS: list[str] = [
     c.strip()
