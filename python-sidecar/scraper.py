@@ -2537,12 +2537,23 @@ def scrape_woonzeker_via_sitemap(
         new_candidates = new_candidates[:WOONZEKER_MAX_FETCHES_PER_CYCLE]
 
     houses: list[dict[str, str]] = []
+    consecutive_failures = 0
+    max_consecutive_failures = 3
     for url in new_candidates:
         try:
-            body = _http_get(url)
+            body = _http_get(url, timeout=15)
         except Exception as exc:
+            consecutive_failures += 1
             log.warning("Woonzeker: detail fetch failed for %s: %s", url, exc)
+            if consecutive_failures >= max_consecutive_failures:
+                log.warning(
+                    "Woonzeker: %d consecutive failures — aborting remaining %d fetches (site likely blocking)",
+                    consecutive_failures,
+                    len(new_candidates) - new_candidates.index(url) - 1,
+                )
+                break
             continue
+        consecutive_failures = 0
         try:
             listing = _parse_woonzeker_listing(url, body)
         except Exception as exc:
