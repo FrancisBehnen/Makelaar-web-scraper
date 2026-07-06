@@ -14,6 +14,14 @@ Key env vars: `DB_PATH`, `DATA_DIR`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, 
 
 **Add-site flow**: sending a listing URL from an unsupported site to the Telegram bot makes the responder open a GitHub issue `Add site: {domain}` (label `add-site`). The `claude-add-site.yml` workflow then runs Claude Code to add the parser per `ADDING-SITES.md` and open a PR, commenting on the issue. Requires repo secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`).
 
+## Sales Sidecar (koop in Delft)
+
+Standalone Scrapling scraper in `sales-sidecar/`. Docker service name: `sales-scraper`. Scrapes apartments **for sale** (koop) in the city of Delft priced ≤ €270.000 with ≥ 2 rooms across four sources (Funda koop, Pararius koop, ZO Makelaars, VW Makelaars) and notifies a dedicated Telegram group directly (no responder involvement). Fetch infra and parsers are ported verbatim from `python-sidecar/scraper.py` (StealthyFetcher, retry-once + self-restart watchdog); notification helpers are ported from `responder/tg.py`. The realworks parser uses an inverted status gate (keep koop, skip `/huur/` and `/verkocht/`).
+
+Writes to its **own** SQLite file (`data/sales.sqlite`, table `sales`, WAL) — it never touches the rental `db.sqlite`. Cross-source dedup by normalized address+city; first run seeds the table silently (no notifications); restarts never re-notify.
+
+Key env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SALES_CHAT_IDS` (comma-separated koop group), `TELEGRAM_ALERT_CHAT_IDS` (optional, falls back to sales group), `SALES_DB_PATH` (default `data/sales.sqlite`), `CHECK_INTERVAL` (default 600), `DEBUG_DUMP`.
+
 ## Hostinger VPS
 
 Deployment target for this project.
