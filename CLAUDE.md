@@ -16,7 +16,14 @@ Key env vars: `DB_PATH`, `DATA_DIR`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, 
 
 ## Sales Sidecar (koop in Delft)
 
-Standalone Scrapling scraper in `sales-sidecar/`. Docker service name: `sales-scraper`. Scrapes apartments **for sale** (koop) in the city of Delft priced ≤ €270.000 with ≥ 2 rooms across four sources (Funda koop, Pararius koop, ZO Makelaars, VW Makelaars) and notifies a dedicated Telegram group directly (no responder involvement). Fetch infra and parsers are ported verbatim from `python-sidecar/scraper.py` (StealthyFetcher, retry-once + self-restart watchdog); notification helpers are ported from `responder/tg.py`. The realworks parser uses an inverted status gate (keep koop, skip `/huur/` and `/verkocht/`).
+Standalone Scrapling scraper in `sales-sidecar/`. Docker service name: `sales-scraper`. Scrapes apartments **for sale** (koop) in the city of Delft priced ≤ €270.000 with ≥ 2 kamers across 10 sources and notifies a dedicated Telegram group directly (no responder involvement). Two fetch paths:
+
+- **`SITES`** (StealthyFetcher → parser): Funda koop, Pararius koop — Cloudflare / heavy-JS pages.
+- **`CUSTOM_SITES`** (plain HTTP, `(existing_urls) -> list[house]`): Van Daal & Björnd (realtime-listings JSON feed, filtered to `isSales` + `statusOrig == "available"`); ZO Makelaars, VW Makelaars, Roepman, MORRIS, Hof van Delft (RealWorks list pages — plain HTTP returns the full server-rendered DOM, which also fixes ZO whose StealthyFetcher-rendered cards collapse to empty "Bewaar deze woning" widgets); Prinsenstad Makelaardij (Hayweb `sitemap_listings_res_sale.xml` → per-listing detail, skipping Verkocht / Onder bod).
+
+Fetch infra (retry-once + self-restart watchdog) and the StealthyFetcher parsers are ported from `python-sidecar/scraper.py`; notification helpers from `responder/tg.py`. The RealWorks parser uses an inverted status gate (keep koop, skip `/huur/` and `/verkocht/`).
+
+**Room semantics** — every source normalises to *total kamers* before the ≥ 2 gate: Funda cards show *slaapkamers* (bedrooms) next to a bed icon, so the parser adds the living room back (`bedrooms + 1`); the JSON feed's `rooms` field (not `bedrooms`) is total kamers; RealWorks "Aantal kamers N" (number *after* the label) is total kamers; Prinsenstad "N (waarvan M slaapkamers)" → N. So a 1-bedroom / 2-kamer flat passes and a studio / 1-kamer fails. A **junk filter** drops non-dwellings (parkeerplaats, parkeerplek, garagebox, garage, berging, bouwgrond, kavel, opslag) that slip past the price gate.
 
 Writes to its **own** SQLite file (`data/sales.sqlite`, table `sales`, WAL) — it never touches the rental `db.sqlite`. Cross-source dedup by normalized address+city; first run seeds the table silently (no notifications); restarts never re-notify.
 

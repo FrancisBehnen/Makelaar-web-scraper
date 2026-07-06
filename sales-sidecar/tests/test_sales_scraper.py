@@ -1,5 +1,7 @@
 """Tests for the Delft koop sales scraper."""
 
+import json
+
 import pytest
 
 import sales_scraper as s
@@ -95,9 +97,7 @@ def test_unknown_rooms_kept():
 
 def test_studio_excluded():
     assert (
-        s.passes_filters(
-            _house(straatnaamHuisnummer="Studio Voorstraat 1", kamers="")
-        )
+        s.passes_filters(_house(straatnaamHuisnummer="Studio Voorstraat 1", kamers=""))
         is False
     )
 
@@ -250,3 +250,317 @@ def test_scrape_realworks_koop_status_gate():
     assert len(houses) == 1
     assert "/koop/" in houses[0]["url"]
     assert houses[0]["straatnaamHuisnummer"] == "Voorstraat 1"
+
+
+# ---------------------------------------------------------------------------
+# Room semantics: kamers vs slaapkamers normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bedrooms,expected",
+    [
+        (0, "1 kamer"),  # studio: 0 bedrooms -> 1 kamer
+        (1, "2 kamers"),  # 1 bedroom apart from living room -> 2-kamer
+        (2, "3 kamers"),
+        (4, "5 kamers"),
+    ],
+)
+def test_bedrooms_to_kamers(bedrooms, expected):
+    assert s.bedrooms_to_kamers(bedrooms) == expected
+
+
+def test_one_bedroom_flat_passes_after_normalisation():
+    # A 2-kamer (1 slaapkamer) apartment is exactly what the user wants kept.
+    assert s.passes_filters(_house(kamers="2 kamers")) is True
+
+
+def test_studio_one_kamer_excluded():
+    assert s.passes_filters(_house(kamers="1 kamer")) is False
+
+
+# Funda cards render *bedrooms* (a bare number next to a bed icon), so the
+# parser must add the living room back before applying the >= 2 gate.
+FUNDA_HTML = """
+<div>
+  <a data-testid="listingDetailsAddress" href="/koop/delft/huis-1/">
+    <span class="truncate">Voorstraat 1</span>
+    <span class="text-neutral-80">2611 AB Delft</span>
+  </a>
+  <div><div class="font-semibold"><div class="truncate">
+    &euro; 250.000 k.k.</div></div></div>
+  <ul><li><span>63 m&sup2;</span></li><li><span>1</span></li>
+      <li><span>A</span></li></ul>
+</div>
+"""
+
+
+def test_funda_koop_bedrooms_normalised_to_kamers():
+    page = _adaptor(FUNDA_HTML, "https://www.funda.nl")
+    houses = s.scrape_funda_koop(page)
+    assert len(houses) == 1
+    h = houses[0]
+    # Funda showed "1" (bedroom) -> stored as "2 kamers" so it passes >= 2.
+    assert h["kamers"] == "2 kamers"
+    assert s.passes_filters(h) is True
+
+
+FUNDA_STUDIO_HTML = """
+<div>
+  <a data-testid="listingDetailsAddress" href="/koop/delft/huis-2/">
+    <span class="truncate">Achterstraat 9</span>
+    <span class="text-neutral-80">2611 AB Delft</span>
+  </a>
+  <div><div class="font-semibold"><div class="truncate">
+    &euro; 190.000 k.k.</div></div></div>
+  <ul><li><span>32 m&sup2;</span></li><li><span>0</span></li>
+      <li><span>C</span></li></ul>
+</div>
+"""
+
+
+def test_funda_koop_studio_zero_bedrooms_excluded():
+    page = _adaptor(FUNDA_STUDIO_HTML, "https://www.funda.nl")
+    houses = s.scrape_funda_koop(page)
+    assert len(houses) == 1
+    assert houses[0]["kamers"] == "1 kamer"
+    assert s.passes_filters(houses[0]) is False
+
+
+# ---------------------------------------------------------------------------
+# Realworks "Aantal kamers N" (number *after* the label) + saleprice themes
+# ---------------------------------------------------------------------------
+
+REALWORKS_KAMERS_HTML = """
+<ul>
+  <li class="al2woning aanbodEntry">
+    <a class="aanbodEntryLink"
+       href="/aanbod/woningaanbod/delft/koop/huis-1-voorstraat-1/">x</a>
+    <h3 class="street-address">Voorstraat 1</h3>
+    <span class="locality">Delft</span>
+    <span class="kenmerkValue">&euro; 260.000,- k.k.</span>
+    <span class="kenmerkValue">Appartement</span>
+    <span class="kenmerkValue">63 m&sup2;</span>
+    <span class="kenmerkValue">3</span>
+    <div>Woonoppervlakte 63 m&sup2; Aantal kamers 3</div>
+  </li>
+  <li class="al2woning aanbodEntry">
+    <a class="aanbodEntryLink"
+       href="/aanbod/woningaanbod/delft/koop/huis-2-studioweg-2/">y</a>
+    <h3 class="street-address">Studioweg 2</h3>
+    <span class="locality">Delft</span>
+    <span class="kenmerkValue">&euro; 180.000,- k.k.</span>
+    <div>Woonoppervlakte 30 m&sup2; Aantal kamers 1</div>
+  </li>
+</ul>
+"""
+
+
+def test_realworks_aantal_kamers_parsed_as_total():
+    page = _adaptor(REALWORKS_KAMERS_HTML, "https://www.zomakelaars.nl")
+    houses = s._scrape_realworks_koop(page, "https://www.zomakelaars.nl", "ZO")
+    assert len(houses) == 2
+    by_addr = {h["straatnaamHuisnummer"]: h for h in houses}
+    three = by_addr["Voorstraat 1"]
+    assert three["kamers"] == "3 kamers"
+    assert three["oppervlakte"] == "63 m²"
+    assert "260.000" in three["vraagprijs"]
+    assert s.passes_filters(three) is True
+    # "Aantal kamers 1" -> 1 kamer studio -> excluded by the >= 2 gate.
+    one = by_addr["Studioweg 2"]
+    assert one["kamers"] == "1 kamer"
+    assert s.passes_filters(one) is False
+
+
+# Roepman theme: no kenmerkValue price, price lives in span.saleprice.
+ROEPMAN_HTML = """
+<div class="blok objectblok aanbodEntry">
+  <a class="aanbodEntryLink"
+     href="/aanbod/woningaanbod/delft/koop/huis-3-groene-zoom-14/">x</a>
+  <h3 class="street-address">Groene Zoom 14</h3>
+  <span class="locality">Delft</span>
+  <span class="price prijs"><span class="saleprice">&euro; 265.000,- k.k.</span></span>
+</div>
+"""
+
+
+def test_realworks_roepman_saleprice_and_div_entry():
+    page = _adaptor(ROEPMAN_HTML, "https://www.roepman.nl")
+    houses = s._scrape_realworks_koop(page, "https://www.roepman.nl", "Roepman")
+    assert len(houses) == 1
+    h = houses[0]
+    assert h["straatnaamHuisnummer"] == "Groene Zoom 14"
+    assert "265.000" in h["vraagprijs"]
+    # No room count on Roepman's list card -> kept (unknown rooms).
+    assert h["kamers"] == ""
+    assert s.passes_filters(h) is True
+
+
+# ---------------------------------------------------------------------------
+# Junk filter (parking, garages, storage, plots)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title,is_junk",
+    [
+        ("Artemisstraat parkeerplaats 42", True),
+        ("Parkeerplek 7", True),
+        ("Garagebox Voorstraat", True),
+        ("Garage naast nr 3", True),
+        ("Berging 12", True),
+        ("Bouwgrond Delftweg", True),
+        ("Kavel 5", True),
+        ("Opslag unit 9", True),
+        ("Voorstraat 1", False),
+        ("Garagepad 4", False),  # word-boundary: not "garage"
+        ("Bergingang 2", False),  # not "berging" as a whole word
+    ],
+)
+def test_is_junk_listing(title, is_junk):
+    assert s.is_junk_listing(title) is is_junk
+
+
+def test_parking_spot_excluded_by_filter():
+    parking = _house(
+        straatnaamHuisnummer="Artemisstraat parkeerplaats 42",
+        vraagprijs="€ 16.500 k.k.",
+        kamers="",
+    )
+    assert s.passes_filters(parking) is False
+
+
+def test_building_plot_excluded_by_filter():
+    plot = _house(
+        straatnaamHuisnummer="Bouwgrond Delftweg 1",
+        vraagprijs="€ 36.500 k.k.",
+        kamers="",
+    )
+    assert s.passes_filters(plot) is False
+
+
+# ---------------------------------------------------------------------------
+# Realtime-listings JSON feed (Van Daal / Björnd)
+# ---------------------------------------------------------------------------
+
+
+def _feed_entry(**overrides):
+    base = {
+        "address": "Voorstraat 1",
+        "city": "Delft",
+        "url": "/nl/aanbod/koop/delft/appartement/voorstraat-1/abc",
+        "price": "&euro; 250.000 k.k.",
+        "salesPrice": 250000,
+        "rentalsPrice": 0,
+        "livingSurface": 80,
+        "rooms": 3,
+        "bedrooms": 2,
+        "isSales": True,
+        "isRentals": False,
+        "statusOrig": "available",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_realtime_feed_keeps_available_sales(monkeypatch):
+    entries = [
+        _feed_entry(),  # available Delft sale -> kept
+        _feed_entry(statusOrig="sold", address="Sold St 2"),  # sold -> dropped
+        _feed_entry(  # rental-only -> dropped
+            isSales=False, isRentals=True, address="Rental St 3"
+        ),
+    ]
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: json.dumps(entries).encode()
+    )
+    houses = s._scrape_realtime_listings_sales(
+        "https://feed", "https://vandaal.nl", "Van Daal"
+    )
+    assert len(houses) == 1
+    h = houses[0]
+    assert (
+        h["url"]
+        == "https://vandaal.nl/nl/aanbod/koop/delft/appartement/voorstraat-1/abc"
+    )
+    # rooms (total kamers), not bedrooms, is stored.
+    assert h["kamers"] == "3 kamers"
+    assert h["vraagprijs"] == "€ 250.000 k.k."
+    assert s.passes_filters(h) is True
+
+
+def test_realtime_feed_uses_rooms_not_bedrooms(monkeypatch):
+    # A 2-kamer flat: rooms=2, bedrooms=1. Must store total kamers (2), which
+    # passes; storing bedrooms (1) would wrongly fail the >= 2 gate.
+    entries = [_feed_entry(rooms=2, bedrooms=1, salesPrice=240000)]
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: json.dumps(entries).encode()
+    )
+    houses = s._scrape_realtime_listings_sales("u", "https://b.nl", "B")
+    assert houses[0]["kamers"] == "2 kamers"
+    assert s.passes_filters(houses[0]) is True
+
+
+def test_realtime_feed_parking_dropped_by_junk_filter(monkeypatch):
+    entries = [
+        _feed_entry(
+            address="Artemisstraat parkeerplaats 42",
+            salesPrice=16500,
+            rooms=0,
+            bedrooms=0,
+        )
+    ]
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: json.dumps(entries).encode()
+    )
+    houses = s._scrape_realtime_listings_sales("u", "https://b.nl", "B")
+    # The feed helper returns it (available sale); passes_filters rejects it.
+    assert len(houses) == 1
+    assert s.passes_filters(houses[0]) is False
+
+
+# ---------------------------------------------------------------------------
+# Prinsenstad koop detail (Hayweb sale) — sold gate + kamers
+# ---------------------------------------------------------------------------
+
+
+def _prinsenstad_detail(status: str, header: str) -> bytes:
+    return f"""
+    <html><body>
+      <h1>{header}</h1>
+      <table class="feautures">
+        <tr><td class="object_detail_title">Vraagprijs</td>
+            <td>&euro; 260.000,- k.k.</td></tr>
+        <tr><td class="object_detail_title">Status</td>
+            <td>{status}</td></tr>
+        <tr><td class="object_detail_title">Woonoppervlakte</td>
+            <td>96 m&sup2;</td></tr>
+        <tr><td class="object_detail_title">Aantal kamers</td>
+            <td>4 (waarvan 3 slaapkamers)</td></tr>
+      </table>
+    </body></html>
+    """.encode()
+
+
+def test_prinsenstad_koop_available_kept():
+    pytest.importorskip("scrapling.parser")
+    body = _prinsenstad_detail("Beschikbaar", "Te koop: Voorstraat 1, 2611 AB Delft")
+    h = s._parse_prinsenstad_koop_listing(
+        "https://prinsenstadmakelaardij.nl/woningaanbod/koop/delft/voorstraat/1",
+        body,
+    )
+    assert h is not None
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "Delft"
+    assert h["kamers"] == "4 kamers"  # total kamers from "4 (waarvan 3 ...)"
+    assert s.passes_filters(h) is True
+
+
+def test_prinsenstad_koop_sold_skipped():
+    pytest.importorskip("scrapling.parser")
+    body = _prinsenstad_detail("Verkocht", "Verkocht: Voorstraat 1, 2611 AB Delft")
+    h = s._parse_prinsenstad_koop_listing(
+        "https://prinsenstadmakelaardij.nl/woningaanbod/koop/delft/voorstraat/1",
+        body,
+    )
+    assert h is None

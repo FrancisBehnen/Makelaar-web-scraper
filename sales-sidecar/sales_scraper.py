@@ -18,6 +18,7 @@ import sqlite3
 import sys
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
@@ -74,14 +75,40 @@ FUNDA_KOOP_URL = (
     "https://www.funda.nl/zoeken/koop"
     "?selected_area=%5B%22delft%22%5D&price=%220-270000%22"
 )
-PARARIUS_KOOP_URL = (
-    "https://www.pararius.nl/koopwoningen/delft/0-270000/page-{page}"
-)
+PARARIUS_KOOP_URL = "https://www.pararius.nl/koopwoningen/delft/0-270000/page-{page}"
 ZOMAKELAARS_KOOP_URL = (
     "https://www.zomakelaars.nl/aanbod/woningaanbod/Delft/koop/"
     "provincie-Zuid-Holland/"
 )
 VWMAKELAARS_KOOP_URL = "https://delft.vwmakelaars.nl/aanbod/woningaanbod/koop/"
+ROEPMAN_KOOP_URL = (
+    "https://www.roepman.nl/aanbod/woningaanbod/Delft/koop/" "provincie-Zuid-Holland/"
+)
+MORRIS_KOOP_URL = (
+    "https://www.morrismakelaardij.nl/aanbod/woningaanbod/Delft/koop/"
+    "provincie-Zuid-Holland/"
+)
+HOFVANDELFT_KOOP_URL = (
+    "https://www.hofvandelft.nl/aanbod/woningaanbod/Delft/koop/"
+    "provincie-Zuid-Holland/"
+)
+
+# Van Daal and Björnd expose a realtime-listings JSON feed (same shape the Bun
+# app's RealtimeListingsJsonResponseProcessor consumes). Delft's biggest koop
+# makelaars. Plain HTTP; no browser needed.
+VANDAAL_FEED_URL = "https://www.vandaalmakelaardij.nl/nl/realtime-listings/consumer"
+VANDAAL_BASE = "https://www.vandaalmakelaardij.nl"
+BJORND_FEED_URL = "https://www.bjornd.nl/nl/realtime-listings/consumer"
+BJORND_BASE = "https://www.bjornd.nl"
+
+# Prinsenstad (Hayweb platform) publishes a per-segment sale sitemap. The
+# residential-sale feed lists koop objects; the detail pages carry a
+# "Vraagprijs" feature row and a status we gate on (skip Verkocht / Onder bod).
+PRINSENSTAD_SALE_SITEMAP_URL = (
+    "https://prinsenstadmakelaardij.nl/sitemap_listings_res_sale.xml"
+)
+
+_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 # ---------------------------------------------------------------------------
 # Filtering
@@ -108,13 +135,45 @@ def parse_rooms(kamers: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def bedrooms_to_kamers(bedrooms: int) -> str:
+    """Normalise a slaapkamers (bedroom) count to a total-kamers string.
+
+    Dutch convention counts the living room as a kamer, so a 1-bedroom flat is
+    a "2 kamer" apartment. Sources that expose bedrooms (Funda cards, the JSON
+    feed's `bedrooms` field) go through this so every stored `kamers` value is
+    consistently *total* rooms and the >= 2 gate in passes_filters means the
+    same thing everywhere.
+    """
+    total = bedrooms + 1
+    return "1 kamer" if total == 1 else f"{total} kamers"
+
+
+# Non-dwelling listings (parking, storage, plots) that slip past a price/rooms
+# filter. Matched case-insensitively against the address/title.
+_JUNK_RE = re.compile(
+    r"\b("
+    r"parkeerplaats|parkeerplek|garagebox|garage|berging|"
+    r"bouwgrond|kavel|opslag"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_junk_listing(title: str) -> bool:
+    """True when the address/title denotes a non-dwelling (parking, plot, …)."""
+    return bool(_JUNK_RE.search(title or ""))
+
+
 def passes_filters(h: dict[str, str]) -> bool:
     """Keep koop apartments in Delft, <= EUR 270.000, >= 2 rooms, no studios.
 
     - Price must be parseable and <= MAX_PRICE (unknown price -> exclude).
     - City must be Delft.
-    - Rooms, when known, must be >= 2 (unknown rooms -> keep).
+    - Rooms, when known, must be >= 2 (unknown rooms -> keep). Every source
+      normalises its room count to *total kamers* before storing, so this gate
+      is uniform (a 1-bedroom / 2-kamer flat passes; a studio / 1-kamer fails).
     - "studio" anywhere in the address -> exclude.
+    - Parking spots, garages, storage boxes and building plots -> exclude.
     """
     price = parse_price_euros(h.get("vraagprijs", "") or "")
     if price is None or price > MAX_PRICE:
@@ -128,7 +187,11 @@ def passes_filters(h: dict[str, str]) -> bool:
     if rooms is not None and rooms < 2:
         return False
 
-    if "studio" in (h.get("straatnaamHuisnummer", "") or "").lower():
+    address = (h.get("straatnaamHuisnummer", "") or "").lower()
+    if "studio" in address:
+        return False
+
+    if is_junk_listing(h.get("straatnaamHuisnummer", "")):
         return False
 
     return True
@@ -189,8 +252,7 @@ def init_db():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS sales (
             url TEXT PRIMARY KEY,
             straatnaamHuisnummer TEXT,
@@ -199,8 +261,7 @@ def init_db():
             oppervlakte TEXT,
             kamers TEXT
         )
-        """
-    )
+        """)
     conn.commit()
     return conn
 
@@ -266,12 +327,7 @@ def find_duplicate(conn, h: dict[str, str]) -> str | None:
 
 def escape_html(text: str) -> str:
     """Escape characters special inside Telegram HTML messages."""
-    return (
-        (text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _send(chat_ids_raw: str, text: str) -> None:
@@ -389,9 +445,7 @@ def scrape_pararius_koop(page) -> list[dict[str, str]]:
             area_el = listing.css(".illustrated-features__item--surface-area")
             area = (area_el[0].text or "").strip() if area_el else ""
 
-            rooms_el = listing.css(
-                ".illustrated-features__item--number-of-rooms"
-            )
+            rooms_el = listing.css(".illustrated-features__item--number-of-rooms")
             rooms = (rooms_el[0].text or "").strip() if rooms_el else ""
 
             houses.append(
@@ -425,9 +479,7 @@ def scrape_funda_koop(page) -> list[dict[str, str]]:
             url = make_absolute(href, "https://www.funda.nl")
 
             addr_spans = addr_link.css("span.truncate")
-            address = " ".join(
-                (s.text or "").strip() for s in addr_spans
-            ).strip()
+            address = " ".join((s.text or "").strip() for s in addr_spans).strip()
 
             city_el = addr_link.css(".text-neutral-80")
             city = (city_el[0].text or "").strip() if city_el else "Delft"
@@ -451,7 +503,11 @@ def scrape_funda_koop(page) -> list[dict[str, str]]:
                 if "m²" in txt or "m2" in txt:
                     area = txt
                 elif txt.isdigit():
-                    rooms = f"{txt} kamers" if int(txt) != 1 else "1 kamer"
+                    # Funda's search card shows the bare number of *bedrooms*
+                    # (slaapkamers) next to a bed icon, not total kamers.
+                    # Cross-checked live: Meeslaan 18 shows "2" on Funda but is
+                    # a 3-kamer flat on Realworks. Normalise to total kamers.
+                    rooms = bedrooms_to_kamers(int(txt))
 
             if address:
                 houses.append(
@@ -470,16 +526,41 @@ def scrape_funda_koop(page) -> list[dict[str, str]]:
     return houses
 
 
-def _scrape_realworks_koop(
-    page, base_url: str, site_name: str
-) -> list[dict[str, str]]:
+def _realworks_price(listing) -> str:
+    """Extract the asking price from a Realworks list-card.
+
+    Themes differ: Roepman/VW wrap it in `span.saleprice`; ZO/Hof van Delft/
+    MORRIS surface it as the first `span.kenmerkValue`. Prefer the explicit
+    sale-price span, then the euro-bearing kenmerkValue, then the first one.
+    """
+    sale = _first_text(listing, "span.saleprice")
+    if sale:
+        return sale
+    kvs = listing.css("span.kenmerkValue")
+    for kv in kvs:
+        txt = (kv.text or "").strip()
+        if "€" in txt:
+            return txt
+    return (kvs[0].text or "").strip() if kvs else ""
+
+
+def _scrape_realworks_koop(page, base_url: str, site_name: str) -> list[dict[str, str]]:
     """Realworks-platform parser with an inverted status gate: keep koop URLs,
     skip /huur/ and /verkocht/. City check uses is_delft_city.
+
+    Room count comes from the "Aantal kamers N" kenmerk (total kamers — the
+    number follows the label, so the old `(\\d+)kamer` regex never matched it)
+    and is stored as total kamers so the >= 2 gate is consistent with the other
+    sources. List cards vary by theme: ZO/Hof van Delft use `.al2woning` with a
+    full kenmerkValue list, MORRIS/VW use `.al4woning`, Roepman uses a bare
+    `div.aanbodEntry` (address + saleprice only, no room count).
     """
     dump_html(page, site_name.lower().replace(" ", ""))
     houses: list[dict[str, str]] = []
 
-    listings = _find_elements(page, "li.aanbodEntry", ".al2woning", ".al4woning")
+    listings = _find_elements(
+        page, ".al2woning", ".al4woning", "li.aanbodEntry", "div.aanbodEntry"
+    )
     log.info("%s: %d listing elements found", site_name, len(listings))
 
     for listing in listings:
@@ -501,8 +582,7 @@ def _scrape_realworks_koop(
             if city and not is_delft_city(city):
                 continue
 
-            price_el = listing.css("span.kenmerkValue")
-            price = (price_el[0].text or "").strip() if price_el else ""
+            price = _realworks_price(listing)
 
             all_text = listing.get_all_text() or ""
             area = ""
@@ -510,12 +590,15 @@ def _scrape_realworks_koop(
             if area_match:
                 area = f"{area_match.group(1)} m²"
 
+            # "Aantal kamers 4" -> 4 total kamers. Deliberately anchored on the
+            # "aantal kamers" label so it never picks up "aantal slaapkamers".
             rooms = ""
             rooms_match = re.search(
-                r"(\d+)\s*(?:slaap)?kamer", all_text, re.IGNORECASE
+                r"aantal\s+kamers?\s*:?\s*(\d+)", all_text, re.IGNORECASE
             )
             if rooms_match:
-                rooms = rooms_match.group(0).strip()
+                n = int(rooms_match.group(1))
+                rooms = "1 kamer" if n == 1 else f"{n} kamers"
 
             houses.append(
                 {
@@ -539,17 +622,287 @@ def scrape_zomakelaars_koop(page) -> list[dict[str, str]]:
     )
 
 
-def scrape_vwmakelaars_koop(page) -> list[dict[str, str]]:
-    return _scrape_realworks_koop(
-        page, "https://delft.vwmakelaars.nl", "VW Makelaars koop"
+def _scrape_realworks_koop_http(
+    feed_url: str, base_url: str, site_name: str, existing_urls: set[str]
+) -> list[dict[str, str]]:
+    """Fetch a Realworks koop list page over plain HTTP and parse it.
+
+    Realworks serves the full listing DOM server-side, so a browser is
+    unnecessary — and StealthyFetcher's rendered DOM reshuffles ZO Makelaars'
+    cards into empty "Bewaar deze woning" widgets, which is why the browser
+    path yielded 0. Plain HTTP returns clean, parseable HTML for every theme.
+    """
+    from scrapling.parser import Adaptor
+
+    try:
+        body = _http_get(feed_url)
+    except Exception as exc:
+        log.warning("%s: fetch failed: %s", site_name, exc)
+        return []
+    page = Adaptor(content=body, url=feed_url)
+    return _scrape_realworks_koop(page, base_url, site_name)
+
+
+# ---------------------------------------------------------------------------
+# Realtime-listings JSON feed (Van Daal, Björnd)
+# ---------------------------------------------------------------------------
+# Same JSON shape the Bun app's RealtimeListingsJsonResponseProcessor consumes:
+# each object exposes isSales/salesPrice/city/rooms/bedrooms/statusOrig. `rooms`
+# is the *total* kamers count and `bedrooms` the slaapkamers — we store `rooms`
+# so the shared >= 2 gate is consistent. Keep only available (not sold/bought)
+# koop entries; price/city/junk are enforced later by passes_filters.
+
+
+def _format_sales_price(sales_price: int) -> str:
+    """1000-dotted euro string, e.g. 225000 -> "€ 225.000 k.k."."""
+    return f"€ {sales_price:,.0f} k.k.".replace(",", ".")
+
+
+def _scrape_realtime_listings_sales(
+    feed_url: str, base_url: str, site_name: str
+) -> list[dict[str, str]]:
+    try:
+        body = _http_get(feed_url)
+    except Exception as exc:
+        log.warning("%s: feed fetch failed: %s", site_name, exc)
+        return []
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        log.warning("%s: feed JSON parse failed: %s", site_name, exc)
+        return []
+    if not isinstance(data, list):
+        log.warning("%s: feed is not a list", site_name)
+        return []
+
+    houses: list[dict[str, str]] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("isSales"):
+            continue
+        # Only currently-available listings; drops sold / is_bought /
+        # under_bid / sold_ur, matching the Bun processor's statusOrig gate.
+        if entry.get("statusOrig") != "available":
+            continue
+
+        sales_price = entry.get("salesPrice") or 0
+        rooms = entry.get("rooms")
+        rel_url = entry.get("url", "")
+        houses.append(
+            {
+                "url": make_absolute(rel_url, base_url),
+                "straatnaamHuisnummer": (entry.get("address") or "").strip(),
+                "plaats": (entry.get("city") or "").strip(),
+                "vraagprijs": (
+                    _format_sales_price(int(sales_price)) if sales_price else ""
+                ),
+                "oppervlakte": (
+                    f"{entry.get('livingSurface')} m²"
+                    if entry.get("livingSurface")
+                    else ""
+                ),
+                "kamers": f"{rooms} kamers" if rooms else "",
+            }
+        )
+    log.info("%s: %d available koop entries in feed", site_name, len(houses))
+    return houses
+
+
+def scrape_vandaal_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realtime_listings_sales(
+        VANDAAL_FEED_URL, VANDAAL_BASE, "Van Daal Makelaardij"
     )
 
 
+def scrape_bjornd_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realtime_listings_sales(BJORND_FEED_URL, BJORND_BASE, "Björnd")
+
+
+def scrape_roepman_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realworks_koop_http(
+        ROEPMAN_KOOP_URL, "https://www.roepman.nl", "Roepman", existing_urls
+    )
+
+
+def scrape_morris_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realworks_koop_http(
+        MORRIS_KOOP_URL,
+        "https://www.morrismakelaardij.nl",
+        "MORRIS Makelaardij",
+        existing_urls,
+    )
+
+
+def scrape_hofvandelft_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realworks_koop_http(
+        HOFVANDELFT_KOOP_URL,
+        "https://www.hofvandelft.nl",
+        "Hof van Delft",
+        existing_urls,
+    )
+
+
+def scrape_zomakelaars_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realworks_koop_http(
+        ZOMAKELAARS_KOOP_URL,
+        "https://www.zomakelaars.nl",
+        "ZO Makelaars koop",
+        existing_urls,
+    )
+
+
+def scrape_vwmakelaars_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    return _scrape_realworks_koop_http(
+        VWMAKELAARS_KOOP_URL,
+        "https://delft.vwmakelaars.nl",
+        "VW Makelaars koop",
+        existing_urls,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prinsenstad Makelaardij koop via sale sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Hayweb platform. The res-sale sitemap lists koop objects (many already sold);
+# each detail page carries a "Vraagprijs" feature row and a "Status" we gate on.
+
+_SOLD_STATUS_RE = re.compile(r"verkocht|onder bod|onder voorbehoud", re.IGNORECASE)
+
+
+def _parse_prinsenstad_koop_listing(url: str, body: bytes) -> dict[str, str] | None:
+    from scrapling.parser import Adaptor
+
+    a = Adaptor(content=body, url=url)
+
+    fields: dict[str, str] = {}
+    for row in a.css("table.feautures tr"):
+        label_els = row.css("td.object_detail_title")
+        if not label_els:
+            continue
+        cells = row.css("td")
+        if len(cells) < 2:
+            continue
+        label = (label_els[0].text or "").strip().lower()
+        val = (cells[-1].text or "").strip() or (cells[-1].get_all_text() or "").strip()
+        if label:
+            fields.setdefault(label, val)
+
+    price = fields.get("vraagprijs", "") or fields.get("koopprijs", "")
+    if not price:
+        return None
+
+    # Skip sold / under-offer listings — the sale sitemap keeps them around.
+    status = fields.get("status", "")
+    if _SOLD_STATUS_RE.search(status):
+        return None
+
+    h1_els = a.css("h1")
+    h1 = (h1_els[0].get_all_text() or "").strip() if h1_els else ""
+    if _SOLD_STATUS_RE.search(h1):
+        return None
+    header = re.sub(
+        r"^(Te huur|Te koop|Verhuurd|Verkocht|Onder bod|Nieuw in verkoop)" r"\s*:\s*",
+        "",
+        h1,
+        flags=re.I,
+    ).strip()
+    parts = [p.strip() for p in header.split(",") if p.strip()]
+    address = parts[0] if parts else "Onbekend"
+    city = ""
+    if len(parts) >= 2:
+        city = re.sub(r"^\d{4}\s*[A-Z]{2}\s*", "", parts[-1]).strip()
+
+    if city and not is_delft_city(city):
+        return None
+
+    area = fields.get("woonoppervlakte", "")
+    rooms_raw = fields.get("aantal kamers", "")
+    # "4 (waarvan 3 slaapkamers)" -> total kamers 4.
+    rooms_num = re.match(r"(\d+)", rooms_raw)
+    if rooms_num:
+        n = rooms_num.group(1)
+        rooms = "1 kamer" if n == "1" else f"{n} kamers"
+    else:
+        rooms = rooms_raw
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_prinsenstad_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(PRINSENSTAD_SALE_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Prinsenstad: sitemap fetch failed: %s", exc)
+        return []
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Prinsenstad: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls = [
+        loc.text
+        for u in root.findall("sm:url", _SITEMAP_NS)
+        if (loc := u.find("sm:loc", _SITEMAP_NS)) is not None and loc.text
+    ]
+    log.info("Prinsenstad: sale sitemap has %d total URLs", len(all_urls))
+
+    # Slugs encode the city ("…/koop/delft/…"); drop non-Delft before fetching.
+    candidates = [u for u in all_urls if is_delft_city(u.replace("-", " "))]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Prinsenstad: %d Delft koop candidates, %d new",
+        len(candidates),
+        len(new_candidates),
+    )
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _http_get(url)
+        except Exception as exc:
+            log.warning("Prinsenstad: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_prinsenstad_koop_listing(url, body)
+        except Exception as exc:
+            log.warning("Prinsenstad: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Prinsenstad: %d available koop match(es)", len(houses))
+    return houses
+
+
+# StealthyFetcher-backed sites (Cloudflare / heavy JS). Each entry is
+# (name, url, parser); the parser receives a rendered page.
 SITES = [
     ("Pararius koop", PARARIUS_KOOP_URL, scrape_pararius_koop),
     ("Funda koop", FUNDA_KOOP_URL, scrape_funda_koop),
-    ("ZO Makelaars koop", ZOMAKELAARS_KOOP_URL, scrape_zomakelaars_koop),
-    ("VW Makelaars koop", VWMAKELAARS_KOOP_URL, scrape_vwmakelaars_koop),
+]
+
+
+# Sites that fetch themselves over plain HTTP (JSON feeds, Realworks list
+# pages, sitemaps). Each entry is (name, fetcher) where
+# fetcher(existing_urls) -> list[house].
+CUSTOM_SITES = [
+    ("Van Daal Makelaardij", scrape_vandaal_sales),
+    ("Björnd", scrape_bjornd_sales),
+    ("ZO Makelaars koop", scrape_zomakelaars_sales),
+    ("VW Makelaars koop", scrape_vwmakelaars_sales),
+    ("Roepman", scrape_roepman_sales),
+    ("MORRIS Makelaardij", scrape_morris_sales),
+    ("Hof van Delft", scrape_hofvandelft_sales),
+    ("Prinsenstad Makelaardij", scrape_prinsenstad_sales),
 ]
 
 
@@ -639,24 +992,18 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
             page = _fetch_with_timeout(url)
         except Exception as first_exc:
             if not (
-                isinstance(first_exc, TimeoutError)
-                or _is_browser_crash(first_exc)
+                isinstance(first_exc, TimeoutError) or _is_browser_crash(first_exc)
             ):
                 raise
             label = (
-                "timed out"
-                if isinstance(first_exc, TimeoutError)
-                else "browser crash"
+                "timed out" if isinstance(first_exc, TimeoutError) else "browser crash"
             )
-            log.warning(
-                "%s page %d %s, retrying once ...", name, page_num, label
-            )
+            log.warning("%s page %d %s, retrying once ...", name, page_num, label)
             try:
                 page = _fetch_with_timeout(url)
             except Exception as retry_exc:
                 if not (
-                    isinstance(retry_exc, TimeoutError)
-                    or _is_browser_crash(retry_exc)
+                    isinstance(retry_exc, TimeoutError) or _is_browser_crash(retry_exc)
                 ):
                     raise
                 log.warning(
@@ -667,8 +1014,7 @@ def _scrape_paginated(name, url_template, parser, existing_urls):
                 )
                 send_throttled_timeout_alert(
                     f"{name}#page{page_num}",
-                    f"⚠️ <b>{name}</b> page {page_num} failed ({label}) — "
-                    f"skipped",
+                    f"⚠️ <b>{name}</b> page {page_num} failed ({label}) — " f"skipped",
                 )
                 break
         page_houses = parser(page)
@@ -750,9 +1096,7 @@ def run_cycle():
                 try:
                     page = _fetch_with_timeout(url)
                 except Exception as exc:
-                    if not (
-                        isinstance(exc, TimeoutError) or _is_browser_crash(exc)
-                    ):
+                    if not (isinstance(exc, TimeoutError) or _is_browser_crash(exc)):
                         raise
                     label = (
                         "timed out"
@@ -771,15 +1115,28 @@ def run_cycle():
                 len(houses),
                 len(matched),
             )
-            notified_total += process_houses(
-                conn, matched, existing_urls, seeding
-            )
+            notified_total += process_houses(conn, matched, existing_urls, seeding)
         except TimeoutError:
             log.warning("%s timed out after %ds, skipping", name, FETCH_TIMEOUT)
             send_throttled_timeout_alert(
                 name,
                 f"⚠️ <b>{name}</b> timed out after {FETCH_TIMEOUT}s — skipped",
             )
+        except Exception as exc:
+            log.error("%s scrape failed: %s", name, exc, exc_info=True)
+
+    for name, fetcher in CUSTOM_SITES:
+        try:
+            houses = fetcher(existing_urls)
+            matched = [h for h in houses if passes_filters(h)]
+            counts[name] = len(matched)
+            log.info(
+                "%s: %d scraped, %d match koop filters",
+                name,
+                len(houses),
+                len(matched),
+            )
+            notified_total += process_houses(conn, matched, existing_urls, seeding)
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
@@ -795,7 +1152,7 @@ def main():
 
     log.info(
         "Starting sales scraper (%d sources)  db=%s  interval=%ds  debug=%s",
-        len(SITES),
+        len(SITES) + len(CUSTOM_SITES),
         DB_PATH,
         CHECK_INTERVAL,
         DEBUG_DUMP,
@@ -816,9 +1173,7 @@ def main():
     while True:
         try:
             notified, counts = run_cycle()
-            log.info(
-                "Cycle done — matches=%s notified=%d", counts, notified
-            )
+            log.info("Cycle done — matches=%s notified=%d", counts, notified)
         except Exception as exc:
             log.error("Cycle failed: %s", exc, exc_info=True)
         time.sleep(CHECK_INTERVAL)
