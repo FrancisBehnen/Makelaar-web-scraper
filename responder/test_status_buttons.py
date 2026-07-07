@@ -178,6 +178,32 @@ def test_repeated_press_replaces_previous_prefix(monkeypatch):
     assert rec.edits[0]["text"] == "❌ Voorstraat 1\nDelft"
 
 
+def test_reaction_failure_escapes_special_chars(monkeypatch):
+    # Telegram returns message.text DECODED (`&`, `<`, `>` are literal), but
+    # edit_text always sends parse_mode=HTML — so the recycled text must be
+    # re-escaped or editMessageText fails silently on URL query params.
+    rec = _Recorder(monkeypatch, reaction_ok=False)
+    responder._handle_callback(
+        _callback("st:i", text="Voorstraat 1\nhttps://x.nl/?a=1&b=2 <tag>")
+    )
+    assert len(rec.edits) == 1
+    assert rec.edits[0]["text"] == (
+        "📅 Voorstraat 1\nhttps://x.nl/?a=1&amp;b=2 &lt;tag&gt;"
+    )
+
+
+def test_repeated_press_escapes_once_no_double_escape(monkeypatch):
+    # Simulate the real two-press flow: the FIRST press escaped `&` -> `&amp;`
+    # and Telegram rendered it back to `&`; the SECOND press therefore receives
+    # DECODED text again (with the old ✅ prefix). Stripping + escaping once must
+    # produce `&amp;` — never `&amp;amp;`.
+    rec = _Recorder(monkeypatch, reaction_ok=False)
+    responder._handle_callback(
+        _callback("st:x", text="✅ Voorstraat 1\nhttps://x.nl/?a=1&b=2")
+    )
+    assert rec.edits[0]["text"] == "❌ Voorstraat 1\nhttps://x.nl/?a=1&amp;b=2"
+
+
 def test_strip_status_prefix_no_prefix_is_noop():
     assert responder._strip_status_prefix("Plain\nrest") == "Plain\nrest"
 
