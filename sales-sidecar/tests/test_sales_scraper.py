@@ -1486,7 +1486,7 @@ def test_delete_listing_messages_marks_sold(db, monkeypatch):
     )
 
     result = s._delete_listing_messages(db, "https://a.nl/1")
-    assert result == "Voorstraat 1"
+    assert result == ("Voorstraat 1", "https://a.nl/1")
     assert deleted_calls == [("-100", 42)]
 
     row = db.execute(
@@ -1523,7 +1523,7 @@ def test_delete_listing_messages_no_tg_ids_still_marks_sold(db, monkeypatch):
     db.commit()
 
     result = s._delete_listing_messages(db, "https://a.nl/1")
-    assert result == "Voorstraat 1"
+    assert result == ("Voorstraat 1", "https://a.nl/1")
 
     row = db.execute(
         "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
@@ -1554,7 +1554,7 @@ def test_process_sold_urls_returns_addresses(db, monkeypatch):
     removed = s.process_sold_urls(
         db, {"https://a.nl/1", "https://unknown.nl/2"}
     )
-    assert removed == ["Voorstraat 1"]
+    assert removed == [("Voorstraat 1", "https://a.nl/1")]
     assert deleted_calls == [("-100", 55)]
 
 
@@ -1594,7 +1594,7 @@ def test_recheck_detects_sold_listing(db, monkeypatch):
     )
 
     removed = s.recheck_available_listings(db)
-    assert removed == ["Voorstraat 1"]
+    assert removed == [("Voorstraat 1", "https://a.nl/1")]
     assert deleted_calls == [("-100", 77)]
 
     row = db.execute(
@@ -1701,11 +1701,13 @@ def test_send_sold_summary_sends_and_stores_ids(monkeypatch):
     )
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
 
-    s._send_sold_summary(["Voorstraat 1", "Achterstraat 9"])
+    s._send_sold_summary(
+        [("Voorstraat 1", "https://a.nl/1"), ("Achterstraat 9", "https://a.nl/9")]
+    )
 
     assert len(sent_texts) == 1
-    assert "Voorstraat 1" in sent_texts[0]
-    assert "Achterstraat 9" in sent_texts[0]
+    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in sent_texts[0]
+    assert '<a href="https://a.nl/9">Achterstraat 9</a>' in sent_texts[0]
     assert "2 woningen" in sent_texts[0]
     assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 200}]
 
@@ -1722,7 +1724,7 @@ def test_send_sold_summary_deletes_previous(monkeypatch):
         lambda chat_ids, text: [{"chat_id": "-100", "message_id": 201}],
     )
 
-    s._send_sold_summary(["Markt 3"])
+    s._send_sold_summary([("Markt 3", "https://a.nl/3")])
 
     assert ("-100", 150) in deleted_calls
     assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 201}]
@@ -1737,5 +1739,5 @@ def test_send_sold_summary_singular(monkeypatch):
     )
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
 
-    s._send_sold_summary(["Voorstraat 1"])
+    s._send_sold_summary([("Voorstraat 1", "https://a.nl/1")])
     assert "1 woning" in sent_texts[0]

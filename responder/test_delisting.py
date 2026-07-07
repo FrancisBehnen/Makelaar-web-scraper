@@ -342,7 +342,7 @@ def test_recheck_deletes_and_marks_gone(rdb, monkeypatch):
     monkeypatch.setattr(delisting, "is_gone", lambda url: True)
 
     removed = delisting.recheck_delisted()
-    assert removed == ["Voorstraat 1"]
+    assert removed == [("Voorstraat 1", "https://a.nl/1")]
     assert calls == [("-100", 42)]
     row = rdb.execute("SELECT listing_status FROM responses").fetchone()
     assert row["listing_status"] == "gone"
@@ -385,7 +385,7 @@ def test_recheck_marks_gone_even_when_delete_fails_48h(rdb, monkeypatch):
     monkeypatch.setattr(delisting, "is_gone", lambda url: True)
 
     removed = delisting.recheck_delisted()
-    assert removed == ["Voorstraat 1"]
+    assert removed == [("Voorstraat 1", "https://a.nl/1")]
     row = rdb.execute("SELECT listing_status FROM responses").fetchone()
     assert row["listing_status"] == "gone"
 
@@ -416,11 +416,13 @@ def test_send_gone_summary_sends_and_stores_ids(rdb, monkeypatch):
     )
     monkeypatch.setattr(tg, "delete_message", lambda *a: True)
 
-    delisting.send_gone_summary(["Voorstraat 1", "Achterstraat 9"])
+    delisting.send_gone_summary(
+        [("Voorstraat 1", "https://a.nl/1"), ("Achterstraat 9", "https://a.nl/9")]
+    )
 
     assert len(sent) == 1
-    assert "Voorstraat 1" in sent[0]
-    assert "Achterstraat 9" in sent[0]
+    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in sent[0]
+    assert '<a href="https://a.nl/9">Achterstraat 9</a>' in sent[0]
     assert "2 woningen" in sent[0]
     assert json.loads(db.kv_get("gone_summary_ids")) == {"-100": 200}
 
@@ -432,7 +434,7 @@ def test_send_gone_summary_singular(rdb, monkeypatch):
     )
     monkeypatch.setattr(tg, "delete_message", lambda *a: True)
 
-    delisting.send_gone_summary(["Voorstraat 1"])
+    delisting.send_gone_summary([("Voorstraat 1", "https://a.nl/1")])
     assert "1 woning" in sent[0]
     assert "1 woningen" not in sent[0]
 
@@ -446,6 +448,6 @@ def test_send_gone_summary_deletes_previous(rdb, monkeypatch):
     )
     monkeypatch.setattr(tg, "broadcast", lambda text, **kw: {"-100": 201})
 
-    delisting.send_gone_summary(["Markt 3"])
+    delisting.send_gone_summary([("Markt 3", "https://a.nl/3")])
     assert ("-100", 150) in deleted
     assert json.loads(db.kv_get("gone_summary_ids")) == {"-100": 201}

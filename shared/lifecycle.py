@@ -44,6 +44,17 @@ SIDEBAR_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Non-content blocks whose text is never visible listing status. React/SPA
+# bundles routinely embed an i18n string table (with phrases like
+# "deze woning is niet meer beschikbaar") inside <script> on EVERY page,
+# including live listings — matching those would mark every page gone. These
+# blocks are stripped before any phrase/badge matching. The trailing
+# ``(?:</\1>|\Z)`` alternative tolerates an unclosed tag (strip to end of body).
+SCRIPT_RE = re.compile(
+    r"<(script|style|noscript|template)\b[^>]*>.*?(?:</\1>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def header_region(body: str, window: int = DEFAULT_HEADER_REGION) -> str:
     """Return the slice around the listing's <h1> where a badge is trusted."""
@@ -62,10 +73,13 @@ def reads_gone(
     """Page-scoped gone/sold detection (see module docstring).
 
     ``page_status_re`` matches unambiguous "this listing" phrases anywhere in the
-    body (after stripping sidebar/footer carousels). ``badge_status_re`` matches
-    bare status badges but only inside the page's header region.
+    body (after stripping <script>/<style>/<noscript>/<template> blocks — which
+    on SPA pages embed an i18n string table — and sidebar/footer carousels).
+    ``badge_status_re`` matches bare status badges but only inside the page's
+    header region (also computed from the script-free body).
     """
-    body = SIDEBAR_RE.sub(" ", html)
+    body = SCRIPT_RE.sub(" ", html)
+    body = SIDEBAR_RE.sub(" ", body)
     if page_status_re is not None and page_status_re.search(body):
         return True
     return bool(badge_status_re.search(header_region(body, window)))
@@ -104,18 +118,19 @@ def run_recheck(
     *,
     mark_checked: Callable[[Any], None],
     gone: Callable[[Any], bool],
-    on_gone: Callable[[Any], str | None],
+    on_gone: Callable[[Any], Any | None],
     on_error: Callable[[Any, Exception], None] | None = None,
-) -> list[str]:
+) -> list[Any]:
     """Round-robin recheck loop shared by both services.
 
     For every ``item`` the cursor is advanced first (``mark_checked``) so a
     persistently failing URL never blocks the queue; then ``gone(item)`` decides
     whether it transitioned. On a transition ``on_gone(item)`` performs the
-    delete + status update and returns the address string (or None to skip it in
-    the summary). Returns the list of removed addresses.
+    delete + status update and returns a summary entry — an ``(address, url)``
+    pair (or None to skip it in the summary). Returns the list of removed
+    entries.
     """
-    removed: list[str] = []
+    removed: list[Any] = []
     for item in items:
         mark_checked(item)
         try:
@@ -125,32 +140,40 @@ def run_recheck(
                 on_error(item, exc)
             continue
         if is_transitioned:
-            addr = on_gone(item)
-            if addr is not None:
-                removed.append(addr)
+            entry = on_gone(item)
+            if entry is not None:
+                removed.append(entry)
     return removed
 
 
 def build_summary_text(
-    addresses: list[str],
+    listings: list[tuple[str, str]],
     *,
     title_template: str,
     escape: Callable[[str], str],
 ) -> str:
     """Build the batched summary body.
 
+    ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
+    (HTML-escaped) address to its listing URL. The messages are sent with
+    ``parse_mode=HTML`` and link previews disabled, so a bullet is
+    ``• <a href="URL">address</a>``.
+
     ``title_template`` is formatted with ``count`` and ``word`` (correctly
     pluralised) and should already contain the leading emoji and ``<b>…</b>``.
     """
-    count = len(addresses)
+    count = len(listings)
     word = "woning" if count == 1 else "woningen"
-    listing_lines = "\n".join(f"• {escape(a)}" for a in addresses)
+    listing_lines = "\n".join(
+        f'• <a href="{escape(url)}">{escape(address)}</a>'
+        for address, url in listings
+    )
     title = title_template.format(count=count, word=word)
     return f"{title}\n\n{listing_lines}"
 
 
 def send_replaceable_summary(
-    addresses: list[str],
+    listings: list[tuple[str, str]],
     *,
     title_template: str,
     escape: Callable[[str], str],
@@ -159,12 +182,14 @@ def send_replaceable_summary(
 ) -> Any:
     """Delete the previous summary, send a fresh one, return the new send result.
 
-    The caller owns summary-id persistence (kv row vs in-memory), passing a
-    ``delete_previous`` that removes the last summary and a ``broadcast`` that
-    sends the new text and returns whatever id structure it stores.
+    ``listings`` is a list of ``(address, url)`` pairs (see
+    :func:`build_summary_text`). The caller owns summary-id persistence (kv row
+    vs in-memory), passing a ``delete_previous`` that removes the last summary
+    and a ``broadcast`` that sends the new text and returns whatever id
+    structure it stores.
     """
     delete_previous()
     text = build_summary_text(
-        addresses, title_template=title_template, escape=escape
+        listings, title_template=title_template, escape=escape
     )
     return broadcast(text)

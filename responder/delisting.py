@@ -134,21 +134,23 @@ def is_gone(url: str) -> bool:
     )
 
 
-def _delete_listing_messages(row) -> str | None:
+def _delete_listing_messages(row) -> tuple[str, str] | None:
     """Delete the Telegram message(s) for a gone listing and mark it gone.
 
-    Returns the address string (for the summary), or None if nothing to do.
+    Returns an ``(address, url)`` pair (for the linked summary), or None if
+    there is nothing to do.
     """
     addr = row["straatnaamHuisnummer"] or row["url"]
     for chat_id, message_id in json.loads(row["tg_message_ids"] or "{}").items():
         tg.delete_message(str(chat_id), message_id)
     db.mark_listing_gone(row["id"])
     log.info("Listing gone, deleted TG message(s): %s (%s)", addr, row["url"])
-    return addr
+    return addr, row["url"]
 
 
-def recheck_delisted() -> list[str]:
-    """Re-check a batch of available listings; return addresses newly removed."""
+def recheck_delisted() -> list[tuple[str, str]]:
+    """Re-check a batch of available listings; return (address, url) pairs
+    for the listings newly removed this cycle."""
     rows = db.available_listings(config.RECHECK_BATCH_SIZE)
     return lifecycle.run_recheck(
         rows,
@@ -163,8 +165,12 @@ def recheck_delisted() -> list[str]:
     )
 
 
-def send_gone_summary(addresses: list[str]) -> None:
-    """Send one summary of removed listings, replacing the previous summary."""
+def send_gone_summary(listings: list[tuple[str, str]]) -> None:
+    """Send one summary of removed listings, replacing the previous summary.
+
+    ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
+    address to its listing URL.
+    """
     prev = db.kv_get(_GONE_SUMMARY_KV)
 
     def delete_previous() -> None:
@@ -173,7 +179,7 @@ def send_gone_summary(addresses: list[str]) -> None:
                 tg.delete_message(str(chat_id), message_id)
 
     message_ids = lifecycle.send_replaceable_summary(
-        addresses,
+        listings,
         title_template=_SUMMARY_TITLE,
         escape=esc,
         delete_previous=delete_previous,
