@@ -1275,6 +1275,82 @@ def test_send_returns_empty_on_failure(monkeypatch):
     assert result == []
 
 
+# ---------------------------------------------------------------------------
+# Status buttons (mirrors responder.tg.status_button_row for the shared,
+# stateless callback handler)
+# ---------------------------------------------------------------------------
+
+
+def test_status_buttons_shape():
+    row = s._status_button_row()
+    assert row == [
+        {"text": "✅", "callback_data": "st:r"},
+        {"text": "📅", "callback_data": "st:i"},
+        {"text": "❌", "callback_data": "st:x"},
+        {"text": "🗑", "callback_data": "st:d"},
+    ]
+    assert all(len(b["callback_data"].encode()) <= 64 for b in row)
+
+
+def test_status_keyboard_single_row():
+    kb = s._status_keyboard()
+    assert kb == {"inline_keyboard": [s._status_button_row()]}
+    assert len(kb["inline_keyboard"]) == 1
+
+
+def test_notify_new_listing_attaches_status_keyboard(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        s, "_send",
+        lambda chat_ids, text, *, reply_markup=None: captured.update(
+            {"chat_ids": chat_ids, "text": text, "reply_markup": reply_markup}
+        )
+        or [],
+    )
+    s.notify_new_listing(_house())
+    assert captured["reply_markup"] == s._status_keyboard()
+
+
+def test_send_includes_reply_markup_in_body(monkeypatch):
+    monkeypatch.setattr(s, "TELEGRAM_BOT_TOKEN", "fake-token")
+    bodies = []
+
+    def fake_urlopen(req, timeout=10):
+        bodies.append(json.loads(req.data.decode()))
+
+        class FakeResp:
+            def read(self):
+                return json.dumps(
+                    {"ok": True, "result": {"message_id": 1}}
+                ).encode()
+
+        return FakeResp()
+
+    monkeypatch.setattr(s.urllib.request, "urlopen", fake_urlopen)
+    s._send("-100", "hi", reply_markup=s._status_keyboard())
+    assert bodies[0]["reply_markup"] == s._status_keyboard()
+
+
+def test_send_omits_reply_markup_when_none(monkeypatch):
+    monkeypatch.setattr(s, "TELEGRAM_BOT_TOKEN", "fake-token")
+    bodies = []
+
+    def fake_urlopen(req, timeout=10):
+        bodies.append(json.loads(req.data.decode()))
+
+        class FakeResp:
+            def read(self):
+                return json.dumps(
+                    {"ok": True, "result": {"message_id": 1}}
+                ).encode()
+
+        return FakeResp()
+
+    monkeypatch.setattr(s.urllib.request, "urlopen", fake_urlopen)
+    s._send("-100", "plain alert")
+    assert "reply_markup" not in bodies[0]
+
+
 def test_process_houses_stores_message_ids(db, monkeypatch):
     sent_ids = [{"chat_id": "-100", "message_id": 99}]
     monkeypatch.setattr(s, "notify_new_listing", lambda h: sent_ids)
