@@ -276,6 +276,16 @@ def test_build_summary_text_escapes_address_and_url():
     assert '<a href="http://x?a=1&amp;b=2">A &amp; B</a>' in text
 
 
+def test_build_summary_text_appends_timestamp():
+    text = lifecycle.build_summary_text(
+        [("A", "http://a")],
+        title_template="🗑 <b>{count} {word} weg</b>",
+        escape=lambda s: s,
+        timestamp="08-07 14:32",
+    )
+    assert text.startswith("🗑 <b>1 woning weg</b> (08-07 14:32)")
+
+
 def test_send_replaceable_summary_deletes_then_sends():
     events = []
     result = lifecycle.send_replaceable_summary(
@@ -289,3 +299,35 @@ def test_send_replaceable_summary_deletes_then_sends():
     assert events[0] == "delete"
     assert events[1][0] == "send"
     assert '<a href="http://a">A</a>' in events[1][1]
+
+
+def test_send_replaceable_summary_append_only_skips_delete():
+    events = []
+    result = lifecycle.send_replaceable_summary(
+        [("A", "http://a")],
+        title_template="{count} {word}",
+        escape=lambda s: s,
+        delete_previous=lambda: events.append("delete"),
+        broadcast=lambda text: (events.append(("send", text)), {"id": 2})[1],
+        append_only=True,
+        timestamp="08-07 14:32",
+    )
+    assert result == {"id": 2}
+    # No delete in append-only mode; only the send happened.
+    assert "delete" not in events
+    assert events[0][0] == "send"
+    assert "(08-07 14:32)" in events[0][1]
+
+
+def test_send_replaceable_summary_append_only_default_timestamp():
+    sent = []
+    lifecycle.send_replaceable_summary(
+        [("A", "http://a")],
+        title_template="{count} {word}",
+        escape=lambda s: s,
+        delete_previous=lambda: None,
+        broadcast=lambda text: sent.append(text),
+        append_only=True,
+    )
+    # A date-time stamp (dd-mm HH:MM) is auto-generated when none is supplied.
+    assert re.search(r"\(\d{2}-\d{2} \d{2}:\d{2}\)", sent[0])

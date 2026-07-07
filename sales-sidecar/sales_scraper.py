@@ -64,6 +64,16 @@ RECHECK_BATCH_SIZE = int(os.environ.get("RECHECK_BATCH_SIZE", "5"))
 SELF_RESTART_MARKER = Path(DB_PATH).parent / ".self_restart_sales"
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))
 DEBUG_DUMP = os.environ.get("DEBUG_DUMP", "").lower() in ("1", "true", "yes")
+# Sold-summary mode. The auto-deletion mechanism is freshly deployed and not yet
+# user-verified, so summaries are append-only (each batch leaves its own
+# timestamped message behind, building a visible history) by default. Set
+# SUMMARY_APPEND_ONLY=0 to resume replace-mode (only the latest batch shown).
+SUMMARY_APPEND_ONLY = os.environ.get("SUMMARY_APPEND_ONLY", "1").lower() not in (
+    "0",
+    "false",
+    "no",
+    "",
+)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # Listing notifications go here (the koop Telegram group).
@@ -608,10 +618,14 @@ _SOLD_SUMMARY_TITLE = (
 
 
 def _send_sold_summary(listings: list[tuple[str, str]]) -> None:
-    """Send a summary of removed listings and delete the previous summary.
+    """Send a summary of removed listings.
 
     ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
     address to its listing URL.
+
+    Append-only by default (each batch leaves a timestamped message behind); in
+    replace-mode it deletes the previous summary first. See
+    ``SUMMARY_APPEND_ONLY``.
     """
     global _last_sold_summary_ids
 
@@ -625,6 +639,7 @@ def _send_sold_summary(listings: list[tuple[str, str]]) -> None:
         escape=escape_html,
         delete_previous=delete_previous,
         broadcast=lambda text: _send(TELEGRAM_SALES_CHAT_IDS, text),
+        append_only=SUMMARY_APPEND_ONLY,
     )
 
 
