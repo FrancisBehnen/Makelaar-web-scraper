@@ -9,11 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Build context is the repo root so the shared/ package can be copied in
+# alongside the service. Paths below are relative to the repo root.
+COPY responder/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && scrapling install
 
-COPY *.py .
+COPY responder/*.py .
+COPY shared ./shared
 
 RUN mkdir -p data
 

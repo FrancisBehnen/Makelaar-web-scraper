@@ -5,9 +5,11 @@ listings priced <= EUR 270.000 with >= 2 rooms in the city of Delft, stores
 them in its own SQLite file and notifies a Telegram group directly. The rental
 db.sqlite is never touched.
 
-Ported from python-sidecar/scraper.py (fetch infrastructure, parsers) and
-responder/tg.py (notification helpers). Because the images are independent
-there is no shared library — the relevant pieces are copied in.
+The parsers/fetch infrastructure are ported from python-sidecar/scraper.py. The
+Telegram helpers (HTML escaping, status-button keyboard) and the listing
+lifecycle (page-scoped gone/sold detection, round-robin recheck, replaceable
+summary) are shared with the responder via the repo-root ``shared`` package;
+only the ``urllib`` live sender is kept local for behaviour/test parity.
 """
 
 import json
@@ -21,6 +23,9 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+
+from shared import lifecycle
+from shared.tg import escape_html, status_button_row, status_keyboard
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -310,7 +315,8 @@ def init_db():
             oppervlakte TEXT,
             kamers TEXT,
             tg_message_ids TEXT DEFAULT '',
-            status TEXT DEFAULT 'available'
+            status TEXT DEFAULT 'available',
+            last_checked_at TEXT
         )
         """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
@@ -318,6 +324,10 @@ def init_db():
         conn.execute("ALTER TABLE sales ADD COLUMN tg_message_ids TEXT DEFAULT ''")
     if "status" not in cols:
         conn.execute("ALTER TABLE sales ADD COLUMN status TEXT DEFAULT 'available'")
+    # last_checked_at is the round-robin recheck cursor (ported from the
+    # responder's delisting recheck; supersedes the old fixed rowid ordering).
+    if "last_checked_at" not in cols:
+        conn.execute("ALTER TABLE sales ADD COLUMN last_checked_at TEXT")
     conn.commit()
     return conn
 
@@ -381,29 +391,13 @@ def find_duplicate(conn, h: dict[str, str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def escape_html(text: str) -> str:
-    """Escape characters special inside Telegram HTML messages."""
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _status_button_row() -> list[dict]:
-    """One row of status buttons matching the responder's stateless handler.
-
-    Codes stay tiny (well under Telegram's 64-byte limit) and carry no id — the
-    responder (the bot's only getUpdates consumer) dispatches them statelessly
-    from the callback query's chat_id + message_id. Keep this JSON shape
-    identical to ``responder.tg.status_button_row``.
-    """
-    return [
-        {"text": "✅", "callback_data": "st:r"},  # gereageerd
-        {"text": "📅", "callback_data": "st:i"},  # uitgenodigd
-        {"text": "❌", "callback_data": "st:x"},  # afgewezen
-        {"text": "🗑", "callback_data": "st:d"},  # niet interessant (delete)
-    ]
-
-
-def _status_keyboard() -> dict:
-    return {"inline_keyboard": [_status_button_row()]}
+# Telegram HTML escaping and the status-button keyboard are shared with the
+# responder (``shared.tg``); the responder is the bot's only getUpdates consumer
+# and dispatches these callbacks statelessly, so the JSON must stay identical.
+# ``escape_html`` is imported at module top; the button helpers are aliased under
+# the local underscore names the rest of this module (and its tests) use.
+_status_button_row = status_button_row
+_status_keyboard = status_keyboard
 
 
 def _send(chat_ids_raw: str, text: str, *, reply_markup: dict | None = None) -> list[dict]:
@@ -550,52 +544,82 @@ def process_sold_urls(conn, sold_urls: set[str]) -> list[str]:
     return removed
 
 
+# Page-scoped sold detection for the universal recheck (ported from the
+# responder's delisting logic). Sidebar/footer carousels are stripped first;
+# unambiguous "this listing" phrases are trusted anywhere, bare status badges
+# ("verkocht", "onder bod", …) only inside the page's header region — so a
+# neighbouring "recent verkocht" card can't wrongly delete a live listing.
+_SOLD_PAGE_STATUS_RE = re.compile(
+    r"deze woning is verkocht|status:\s*verkocht",
+    re.IGNORECASE,
+)
+_SOLD_BADGE_STATUS_RE = re.compile(
+    r"verkocht|onder bod|onder voorbehoud",
+    re.IGNORECASE,
+)
+
+
+def _is_sold(url: str) -> bool:
+    """Page-scoped sold check for one listing URL (404/410 also counts)."""
+    return lifecycle.is_gone(
+        url,
+        fetch=lambda u: _http_get(u, timeout=15),
+        page_status_re=_SOLD_PAGE_STATUS_RE,
+        badge_status_re=_SOLD_BADGE_STATUS_RE,
+    )
+
+
+def _touch_checked(conn, url: str) -> None:
+    conn.execute(
+        "UPDATE sales SET last_checked_at = datetime('now') WHERE url = ?",
+        (url,),
+    )
+    conn.commit()
+
+
 def recheck_available_listings(conn) -> list[str]:
     """Re-fetch a batch of available listings via plain HTTP and check status.
 
-    Universal fallback for sources where sold detection doesn't happen
-    during the normal scrape (sitemap detail pages, Funda, etc.).
-    Returns list of addresses that were transitioned to sold.
+    Universal fallback for sources where sold detection doesn't happen during
+    the normal scrape (sitemap detail pages, Funda, etc.). Uses the responder's
+    round-robin cursor (least-recently-checked first, cursor advanced before the
+    fetch) and its page-scoped detection. Returns addresses transitioned to sold.
     """
     rows = conn.execute(
         "SELECT url FROM sales WHERE status = 'available' "
-        "ORDER BY rowid ASC LIMIT ?",
+        "ORDER BY last_checked_at ASC LIMIT ?",
         (RECHECK_BATCH_SIZE,),
     ).fetchall()
-    if not rows:
-        return []
-
-    removed: list[str] = []
-    for (url,) in rows:
-        try:
-            body = _http_get(url, timeout=15)
-        except Exception:
-            continue
-        text = body.decode("utf-8", errors="ignore")
-        if _SOLD_STATUS_RE.search(text):
-            addr = _delete_listing_messages(conn, url)
-            if addr is not None:
-                removed.append(addr)
-    return removed
+    return lifecycle.run_recheck(
+        rows,
+        mark_checked=lambda row: _touch_checked(conn, row[0]),
+        gone=lambda row: _is_sold(row[0]),
+        on_gone=lambda row: _delete_listing_messages(conn, row[0]),
+    )
 
 
 _last_sold_summary_ids: list[dict] = []
+
+_SOLD_SUMMARY_TITLE = (
+    "\U0001f6d1 <b>{count} {word} verkocht/onder bod — bericht(en) verwijderd</b>"
+)
 
 
 def _send_sold_summary(addresses: list[str]) -> None:
     """Send a summary of removed listings and delete the previous summary."""
     global _last_sold_summary_ids
-    for entry in _last_sold_summary_ids:
-        _delete_message(str(entry["chat_id"]), entry["message_id"])
 
-    listing_lines = "\n".join(f"• {escape_html(a)}" for a in addresses)
-    count = len(addresses)
-    word = "woning" if count == 1 else "woningen"
-    text = (
-        f"\U0001f6d1 <b>{count} {word} verkocht/onder bod — "
-        f"bericht(en) verwijderd</b>\n\n{listing_lines}"
+    def delete_previous() -> None:
+        for entry in _last_sold_summary_ids:
+            _delete_message(str(entry["chat_id"]), entry["message_id"])
+
+    _last_sold_summary_ids = lifecycle.send_replaceable_summary(
+        addresses,
+        title_template=_SOLD_SUMMARY_TITLE,
+        escape=escape_html,
+        delete_previous=delete_previous,
+        broadcast=lambda text: _send(TELEGRAM_SALES_CHAT_IDS, text),
     )
-    _last_sold_summary_ids = _send(TELEGRAM_SALES_CHAT_IDS, text)
 
 
 # ---------------------------------------------------------------------------

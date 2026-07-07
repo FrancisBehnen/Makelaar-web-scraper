@@ -31,11 +31,11 @@ jobs:
             dockerfile: ./python-sidecar/Dockerfile
             suffix: "-sidecar"
           - name: responder
-            context: ./responder
+            context: .
             dockerfile: ./responder/Dockerfile
             suffix: "-responder"
           - name: sales
-            context: ./sales-sidecar
+            context: .
             dockerfile: ./sales-sidecar/Dockerfile
             suffix: "-sales"
 
