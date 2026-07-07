@@ -119,6 +119,14 @@ def edit_text(
     _call("editMessageText", params)
 
 
+def delete_message(chat_id: str, message_id: int) -> bool:
+    """Delete a previously sent message. Telegram only allows this within 48h;
+    after that the API rejects it — treat that (and any error) as a soft failure
+    so the caller can still mark the listing as gone."""
+    result = _call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+    return bool(result)
+
+
 def answer_callback(callback_id: str, text: str | None = None) -> None:
     params: dict = {"callback_query_id": callback_id}
     if text:

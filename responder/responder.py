@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import config
 import db
+import delisting
 import detection
 import form_filler
 import github_issues
@@ -181,12 +182,21 @@ def _process_new_listing(url: str) -> None:
     )
 
 
+def _recheck_delisted() -> None:
+    """Delete Telegram messages for listings that are no longer available."""
+    removed = delisting.recheck_delisted()
+    if removed:
+        log.info("Removed %d delisted listing(s): %s", len(removed), removed)
+        delisting.send_gone_summary(removed)
+
+
 def watcher_loop() -> None:
     if db.responses_count() == 0:
         seeded = db.seed_existing()
         if seeded:
             log.info("First run: seeded %d existing listings (not notified)", seeded)
     heartbeat_interval = max(1, 600 // config.POLL_INTERVAL)
+    recheck_interval = max(1, config.RECHECK_INTERVAL // config.POLL_INTERVAL)
     polls = 0
     while True:
         try:
@@ -196,6 +206,11 @@ def watcher_loop() -> None:
         except Exception:
             log.exception("Watcher cycle failed")
         polls += 1
+        if polls % recheck_interval == 0:
+            try:
+                _recheck_delisted()
+            except Exception:
+                log.exception("Delisting recheck failed")
         if polls % heartbeat_interval == 0:
             log.info(
                 "Watcher alive — %d houses tracked, %d responses, poll #%d",
