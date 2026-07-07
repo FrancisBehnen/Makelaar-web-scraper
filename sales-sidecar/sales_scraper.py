@@ -488,19 +488,20 @@ def _delete_message(chat_id: str, message_id: int) -> bool:
         return False
 
 
-def _delete_listing_messages(conn, url: str) -> bool:
+def _delete_listing_messages(conn, url: str) -> str | None:
     """Delete Telegram messages for a listing and mark it as sold.
 
-    Returns True if the listing was transitioned from available to sold.
+    Returns the address string if the listing was transitioned, else None.
     """
     row = conn.execute(
-        "SELECT tg_message_ids, status FROM sales WHERE url = ?", (url,)
+        "SELECT tg_message_ids, status, straatnaamHuisnummer FROM sales WHERE url = ?",
+        (url,),
     ).fetchone()
     if row is None:
-        return False
-    tg_ids_raw, current_status = row
+        return None
+    tg_ids_raw, current_status, addr = row
     if current_status != "available":
-        return False
+        return None
 
     if tg_ids_raw:
         for entry in json.loads(tg_ids_raw):
@@ -509,28 +510,29 @@ def _delete_listing_messages(conn, url: str) -> bool:
     conn.execute("UPDATE sales SET status = 'sold' WHERE url = ?", (url,))
     conn.commit()
 
-    addr_row = conn.execute(
-        "SELECT straatnaamHuisnummer FROM sales WHERE url = ?", (url,)
-    ).fetchone()
-    addr = addr_row[0] if addr_row else url
     log.info("Marked sold and deleted TG message(s): %s (%s)", addr, url)
-    return True
+    return addr or url
 
 
-def process_sold_urls(conn, sold_urls: set[str]) -> int:
-    """Check sold URLs against DB and delete Telegram messages for matches."""
-    deleted = 0
+def process_sold_urls(conn, sold_urls: set[str]) -> list[str]:
+    """Check sold URLs against DB and delete Telegram messages for matches.
+
+    Returns list of addresses that were transitioned to sold.
+    """
+    removed: list[str] = []
     for url in sold_urls:
-        if _delete_listing_messages(conn, url):
-            deleted += 1
-    return deleted
+        addr = _delete_listing_messages(conn, url)
+        if addr is not None:
+            removed.append(addr)
+    return removed
 
 
-def recheck_available_listings(conn) -> int:
+def recheck_available_listings(conn) -> list[str]:
     """Re-fetch a batch of available listings via plain HTTP and check status.
 
     Universal fallback for sources where sold detection doesn't happen
     during the normal scrape (sitemap detail pages, Funda, etc.).
+    Returns list of addresses that were transitioned to sold.
     """
     rows = conn.execute(
         "SELECT url FROM sales WHERE status = 'available' "
@@ -538,9 +540,9 @@ def recheck_available_listings(conn) -> int:
         (RECHECK_BATCH_SIZE,),
     ).fetchall()
     if not rows:
-        return 0
+        return []
 
-    deleted = 0
+    removed: list[str] = []
     for (url,) in rows:
         try:
             body = _http_get(url, timeout=15)
@@ -548,9 +550,29 @@ def recheck_available_listings(conn) -> int:
             continue
         text = body.decode("utf-8", errors="ignore")
         if _SOLD_STATUS_RE.search(text):
-            if _delete_listing_messages(conn, url):
-                deleted += 1
-    return deleted
+            addr = _delete_listing_messages(conn, url)
+            if addr is not None:
+                removed.append(addr)
+    return removed
+
+
+_last_sold_summary_ids: list[dict] = []
+
+
+def _send_sold_summary(addresses: list[str]) -> None:
+    """Send a summary of removed listings and delete the previous summary."""
+    global _last_sold_summary_ids
+    for entry in _last_sold_summary_ids:
+        _delete_message(str(entry["chat_id"]), entry["message_id"])
+
+    listing_lines = "\n".join(f"• {escape_html(a)}" for a in addresses)
+    count = len(addresses)
+    word = "woning" if count == 1 else "woningen"
+    text = (
+        f"\U0001f6d1 <b>{count} {word} verkocht/onder bod — "
+        f"bericht(en) verwijderd</b>\n\n{listing_lines}"
+    )
+    _last_sold_summary_ids = _send(TELEGRAM_SALES_CHAT_IDS, text)
 
 
 # ---------------------------------------------------------------------------
@@ -2034,16 +2056,12 @@ def run_cycle():
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
 
-    sold_deleted = process_sold_urls(conn, _cycle_sold_urls)
-    if sold_deleted:
-        log.info("Deleted %d sold listing message(s) from Telegram", sold_deleted)
-
-    recheck_deleted = recheck_available_listings(conn)
-    if recheck_deleted:
-        log.info(
-            "Recheck: deleted %d sold listing message(s) from Telegram",
-            recheck_deleted,
-        )
+    sold_removed = process_sold_urls(conn, _cycle_sold_urls)
+    recheck_removed = recheck_available_listings(conn)
+    all_removed = sold_removed + recheck_removed
+    if all_removed:
+        log.info("Removed %d sold listing(s): %s", len(all_removed), all_removed)
+        _send_sold_summary(all_removed)
 
     conn.close()
     return notified_total, counts

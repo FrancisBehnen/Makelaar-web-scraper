@@ -1410,7 +1410,7 @@ def test_delete_listing_messages_marks_sold(db, monkeypatch):
     )
 
     result = s._delete_listing_messages(db, "https://a.nl/1")
-    assert result is True
+    assert result == "Voorstraat 1"
     assert deleted_calls == [("-100", 42)]
 
     row = db.execute(
@@ -1431,7 +1431,7 @@ def test_delete_listing_messages_skips_already_sold(db, monkeypatch):
     )
     db.commit()
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
-    assert s._delete_listing_messages(db, "https://a.nl/1") is False
+    assert s._delete_listing_messages(db, "https://a.nl/1") is None
 
 
 def test_delete_listing_messages_no_tg_ids_still_marks_sold(db, monkeypatch):
@@ -1447,7 +1447,7 @@ def test_delete_listing_messages_no_tg_ids_still_marks_sold(db, monkeypatch):
     db.commit()
 
     result = s._delete_listing_messages(db, "https://a.nl/1")
-    assert result is True
+    assert result == "Voorstraat 1"
 
     row = db.execute(
         "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
@@ -1455,7 +1455,7 @@ def test_delete_listing_messages_no_tg_ids_still_marks_sold(db, monkeypatch):
     assert row[0] == "sold"
 
 
-def test_process_sold_urls_deletes_matching_listings(db, monkeypatch):
+def test_process_sold_urls_returns_addresses(db, monkeypatch):
     msg_ids = [{"chat_id": "-100", "message_id": 55}]
     db.execute(
         "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
@@ -1475,17 +1475,17 @@ def test_process_sold_urls_deletes_matching_listings(db, monkeypatch):
         lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
     )
 
-    count = s.process_sold_urls(
+    removed = s.process_sold_urls(
         db, {"https://a.nl/1", "https://unknown.nl/2"}
     )
-    assert count == 1
+    assert removed == ["Voorstraat 1"]
     assert deleted_calls == [("-100", 55)]
 
 
 def test_process_sold_urls_ignores_unknown_urls(db, monkeypatch):
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
-    count = s.process_sold_urls(db, {"https://unknown.nl/1"})
-    assert count == 0
+    removed = s.process_sold_urls(db, {"https://unknown.nl/1"})
+    assert removed == []
 
 
 # ---------------------------------------------------------------------------
@@ -1517,8 +1517,8 @@ def test_recheck_detects_sold_listing(db, monkeypatch):
         lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
     )
 
-    count = s.recheck_available_listings(db)
-    assert count == 1
+    removed = s.recheck_available_listings(db)
+    assert removed == ["Voorstraat 1"]
     assert deleted_calls == [("-100", 77)]
 
     row = db.execute(
@@ -1544,8 +1544,8 @@ def test_recheck_keeps_available_listing(db, monkeypatch):
         lambda url, timeout=15: b"<html>Te koop Beschikbaar</html>",
     )
 
-    count = s.recheck_available_listings(db)
-    assert count == 0
+    removed = s.recheck_available_listings(db)
+    assert removed == []
 
     row = db.execute(
         "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
@@ -1569,8 +1569,8 @@ def test_recheck_skips_on_fetch_failure(db, monkeypatch):
         raise Exception("network error")
 
     monkeypatch.setattr(s, "_http_get", failing_get)
-    count = s.recheck_available_listings(db)
-    assert count == 0
+    removed = s.recheck_available_listings(db)
+    assert removed == []
 
     row = db.execute(
         "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
@@ -1606,3 +1606,60 @@ def test_marloes_sold_records_url():
     url = "https://www.marloesmakelaars.nl/woning/markt-3-te-delft/"
     s._parse_marloes_koop_listing(url, MARLOES_SOLD_DETAIL.encode())
     assert url in s._cycle_sold_urls
+
+
+# ---------------------------------------------------------------------------
+# Sold summary message (sent to Telegram, replaces previous summary)
+# ---------------------------------------------------------------------------
+
+
+def test_send_sold_summary_sends_and_stores_ids(monkeypatch):
+    s._last_sold_summary_ids = []
+    sent_texts = []
+    monkeypatch.setattr(
+        s, "_send",
+        lambda chat_ids, text: (
+            sent_texts.append(text),
+            [{"chat_id": "-100", "message_id": 200}],
+        )[1],
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+
+    s._send_sold_summary(["Voorstraat 1", "Achterstraat 9"])
+
+    assert len(sent_texts) == 1
+    assert "Voorstraat 1" in sent_texts[0]
+    assert "Achterstraat 9" in sent_texts[0]
+    assert "2 woningen" in sent_texts[0]
+    assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 200}]
+
+
+def test_send_sold_summary_deletes_previous(monkeypatch):
+    s._last_sold_summary_ids = [{"chat_id": "-100", "message_id": 150}]
+    deleted_calls = []
+    monkeypatch.setattr(
+        s, "_delete_message",
+        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
+    )
+    monkeypatch.setattr(
+        s, "_send",
+        lambda chat_ids, text: [{"chat_id": "-100", "message_id": 201}],
+    )
+
+    s._send_sold_summary(["Markt 3"])
+
+    assert ("-100", 150) in deleted_calls
+    assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 201}]
+
+
+def test_send_sold_summary_singular(monkeypatch):
+    s._last_sold_summary_ids = []
+    sent_texts = []
+    monkeypatch.setattr(
+        s, "_send",
+        lambda chat_ids, text: (sent_texts.append(text), [])[1],
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+
+    s._send_sold_summary(["Voorstraat 1"])
+    assert "1 woning" in sent_texts[0]
