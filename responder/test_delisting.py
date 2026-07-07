@@ -13,6 +13,7 @@ import json
 import sqlite3
 import threading
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -195,17 +196,14 @@ class _FakeResp:
 
 
 def _mock_urlopen(monkeypatch, body: bytes):
-    monkeypatch.setattr(
-        delisting.urllib.request, "urlopen",
-        lambda req, timeout=15: _FakeResp(body),
-    )
+    monkeypatch.setattr(delisting, "_fetch", lambda req: _FakeResp(body))
 
 
 def _mock_http_error(monkeypatch, code: int):
-    def raise_error(req, timeout=15):
+    def raise_error(req):
         raise urllib.error.HTTPError(req.full_url, code, "err", {}, None)
 
-    monkeypatch.setattr(delisting.urllib.request, "urlopen", raise_error)
+    monkeypatch.setattr(delisting, "_fetch", raise_error)
 
 
 @pytest.mark.parametrize(
@@ -231,12 +229,40 @@ def test_is_gone_false_for_live_listing(monkeypatch):
 
 
 def test_is_gone_false_positive_guard_recently_rented_widget(monkeypatch):
-    # A live, available listing whose page merely lists *other* recently rented
-    # properties in a sidebar must NOT be treated as gone.
+    # THE failure mode: a still-live listing whose page carries a "recent
+    # verhuurd" carousel in an <aside>, and one of those neighbouring cards
+    # carries a real status BADGE ("verhuurd onder voorbehoud"). Matching the
+    # badge anywhere in the body would wrongly delete this live listing.
     body = (
-        b"<html><main>Te huur: Kerkstraat 12, beschikbaar per direct</main>"
-        b"<aside>Recent verhuurde woningen: Marktplein 4, Havenweg 8</aside>"
-        b"</html>"
+        b"<html><main><h1>Kerkstraat 12</h1>"
+        b"Te huur, beschikbaar per direct, 3 kamers</main>"
+        b"<aside>Recent verhuurd: Marktplein 4 - verhuurd onder voorbehoud, "
+        b"Havenweg 8 - onder optie</aside></html>"
+    )
+    _mock_urlopen(monkeypatch, body)
+    assert delisting.is_gone("https://a.nl/1") is False
+
+
+def test_is_gone_true_genuine_gone_page_with_badge(monkeypatch):
+    # Same shape, but now it is THIS listing that is gone: the badge sits in the
+    # header region next to the <h1>. Must be detected as gone.
+    body = (
+        b"<html><main><h1>Kerkstraat 12</h1>"
+        b"<span class='badge'>Verhuurd onder voorbehoud</span></main>"
+        b"<aside>Vergelijkbaar aanbod: Marktplein 4, Havenweg 8</aside></html>"
+    )
+    _mock_urlopen(monkeypatch, body)
+    assert delisting.is_gone("https://a.nl/1") is True
+
+
+def test_is_gone_false_for_badge_outside_header_region(monkeypatch):
+    # A bare badge far below the listing header (e.g. a related block that is not
+    # an <aside>) is outside the trusted window and must not mark the page gone.
+    body = (
+        b"<html><main><h1>Kerkstraat 12</h1>Te huur, beschikbaar</main>"
+        + b"<div>filler</div>" * 400
+        + b"<section class='related'>Marktplein 4 - verhuurd onder voorbehoud"
+        b"</section></html>"
     )
     _mock_urlopen(monkeypatch, body)
     assert delisting.is_gone("https://a.nl/1") is False
@@ -257,11 +283,11 @@ def test_is_gone_sends_huurstunt_cookie(monkeypatch):
     monkeypatch.setattr(config, "HUURSTUNT_COOKIE", "sess=abc; t=1")
     captured = {}
 
-    def fake_urlopen(req, timeout=15):
+    def fake_fetch(req):
         captured["cookie"] = req.headers.get("Cookie")
         return _FakeResp(b"ok")
 
-    monkeypatch.setattr(delisting.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(delisting, "_fetch", fake_fetch)
     delisting.is_gone("https://www.huurstunt.nl/huren/in/delft/x")
     assert captured["cookie"] == "sess=abc; t=1"
 
@@ -270,13 +296,39 @@ def test_is_gone_no_cookie_for_other_sites(monkeypatch):
     monkeypatch.setattr(config, "HUURSTUNT_COOKIE", "sess=abc")
     captured = {}
 
-    def fake_urlopen(req, timeout=15):
+    def fake_fetch(req):
         captured["cookie"] = req.headers.get("Cookie")
         return _FakeResp(b"ok")
 
-    monkeypatch.setattr(delisting.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(delisting, "_fetch", fake_fetch)
     delisting.is_gone("https://www.example.nl/huis/1")
     assert captured["cookie"] is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-host redirect cookie safety
+# ---------------------------------------------------------------------------
+
+
+def _redirect(newurl, code=302):
+    handler = delisting._CookieSafeRedirectHandler()
+    req = urllib.request.Request(
+        "https://www.huurstunt.nl/huren/in/delft/x",
+        headers={"Cookie": "sess=abc", "User-Agent": "x"},
+    )
+    return handler.redirect_request(req, None, code, "Found", {}, newurl)
+
+
+def test_redirect_drops_cookie_cross_host():
+    new = _redirect("https://tracker.example.com/collect")
+    assert new is not None
+    assert new.get_header("Cookie") is None
+
+
+def test_redirect_keeps_cookie_same_host():
+    new = _redirect("https://www.huurstunt.nl/huren/in/delft/y")
+    assert new is not None
+    assert new.get_header("Cookie") == "sess=abc"
 
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,20 @@ delete the original Telegram notification message(s) and send one short summary
 of everything removed this cycle (mirrors the sales-sidecar mechanism).
 
 Detection is deliberately conservative: a listing wrongly deleted is worse than
-one lingering, so the status regex matches specific "this listing is rented"
-phrases rather than a bare occurrence of "verhuurd" (which routinely appears in
-"recently rented" widgets listing *other* properties).
+one lingering. Server-rendered detail pages routinely embed "gerelateerd
+aanbod" / "recent verhuurd" carousels whose *other* cards carry badges like
+"verhuurd onder voorbehoud" or "onder optie". A whole-body regex would treat a
+still-live listing as gone the moment such a neighbour appears, so detection is
+page-scoped instead:
+
+  * sidebar/footer carousels are stripped before matching;
+  * unambiguous "this listing" phrases ("deze woning is verhuurd",
+    "status: verhuurd", …) are trusted anywhere in the remaining body;
+  * bare status badges ("verhuurd onder voorbehoud", "onder optie") — which
+    also appear on neighbouring cards — are trusted only inside the page's own
+    header region (around the listing's <h1>).
+
+A missed detection is acceptable; a false deletion is not.
 """
 
 import json
@@ -34,17 +45,35 @@ _UA = (
 # HTTP statuses that mean the listing page is gone for good.
 _GONE_HTTP_CODES = frozenset({404, 410})
 
-# Conservative "this listing is rented / withdrawn" phrases. Bare "verhuurd" is
-# intentionally excluded — it shows up in unrelated card lists on live pages.
-_GONE_STATUS_RE = re.compile(
-    r"verhuurd onder voorbehoud"
-    r"|onder optie"
-    r"|niet meer beschikbaar"
-    r"|deze woning is (?:inmiddels |per direct )?verhuurd"
+# Sidebar / footer carousels ("gerelateerd aanbod", "recent verhuurd") hold
+# OTHER listings' cards. Their status badges must never be read as the primary
+# listing's status, so these blocks are removed before matching.
+_SIDEBAR_RE = re.compile(
+    r"<(aside|footer)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Unambiguous, page-scoped "this listing is rented / withdrawn" phrases. They
+# describe THE primary listing and never appear on a neighbouring card (which
+# reads "Marktplein 4 — verhuurd"), so they are trusted anywhere in the body.
+_PAGE_STATUS_RE = re.compile(
+    r"deze woning is (?:inmiddels |per direct )?verhuurd"
+    r"|deze woning is onder optie"
     r"|woning is verhuurd"
-    r"|status:\s*verhuurd",
+    r"|status:\s*verhuurd"
+    r"|niet meer beschikbaar",
     re.IGNORECASE,
 )
+
+# Standalone status badges. These also appear on other listings' cards, so they
+# are only trusted inside the page's header region (see _header_region).
+_BADGE_STATUS_RE = re.compile(
+    r"verhuurd onder voorbehoud|onder optie",
+    re.IGNORECASE,
+)
+
+# Window (chars) around the listing's <h1> in which a bare status badge counts.
+_HEADER_REGION = 1500
 
 _GONE_SUMMARY_KV = "gone_summary_ids"
 
@@ -62,6 +91,47 @@ def _headers(url: str) -> dict[str, str]:
     return headers
 
 
+class _CookieSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Drop the Cookie header when a redirect crosses to a different host.
+
+    urllib copies request headers (including Cookie) onto the redirected
+    request even cross-host, which would leak the huurstunt session cookie to a
+    third-party host. Same-host redirects (http->https, canonical URL) keep the
+    cookie so huurstunt detail pages still resolve.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        if urlparse(req.full_url).hostname != urlparse(newurl).hostname:
+            new.remove_header("Cookie")
+        return new
+
+
+_OPENER = urllib.request.build_opener(_CookieSafeRedirectHandler)
+
+
+def _fetch(req: urllib.request.Request):
+    """Open ``req`` through the cookie-safe opener (test seam)."""
+    return _OPENER.open(req, timeout=15)
+
+
+def _header_region(body: str) -> str:
+    """Return the slice around the listing's <h1> where a badge is trusted."""
+    m = re.search(r"<h1\b", body, re.IGNORECASE)
+    start = m.start() if m else 0
+    return body[start : start + _HEADER_REGION]
+
+
+def _reads_gone(html: str) -> bool:
+    """Page-scoped rented-out detection (see module docstring)."""
+    body = _SIDEBAR_RE.sub(" ", html)
+    if _PAGE_STATUS_RE.search(body):
+        return True
+    return bool(_BADGE_STATUS_RE.search(_header_region(body)))
+
+
 def is_gone(url: str) -> bool:
     """Return True when the listing page is a 404/410 or reads as rented-out.
 
@@ -71,12 +141,11 @@ def is_gone(url: str) -> bool:
     """
     req = urllib.request.Request(url, headers=_headers(url))
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _fetch(req) as resp:
             body = resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code in _GONE_HTTP_CODES
-    text = body.decode("utf-8", errors="ignore")
-    return bool(_GONE_STATUS_RE.search(text))
+    return _reads_gone(body.decode("utf-8", errors="ignore"))
 
 
 def _delete_listing_messages(row) -> str | None:
