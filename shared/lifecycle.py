@@ -28,13 +28,28 @@ parameters:
 """
 
 import re
-import time
 import urllib.error
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Format for the date-time stamp appended to append-only summary titles.
 SUMMARY_TIMESTAMP_FORMAT = "%d-%m %H:%M"
+
+# Summaries stamp local Dutch wall-clock time, not the container's UTC clock.
+_SUMMARY_TZ_NAME = "Europe/Amsterdam"
+
+
+def _summary_now() -> datetime:
+    """Current time in Europe/Amsterdam, falling back to UTC if the tz database
+    is unavailable (e.g. a slim image without the ``tzdata`` package). The full
+    ``python:3.12-bookworm`` images this ships in include system tzdata, so the
+    fallback only guards degraded/test environments."""
+    try:
+        return datetime.now(ZoneInfo(_SUMMARY_TZ_NAME))
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc)
 
 # HTTP statuses that mean the listing page is gone for good.
 DEFAULT_GONE_HTTP_CODES = frozenset({404, 410})
@@ -213,7 +228,7 @@ def send_replaceable_summary(
     if not append_only:
         delete_previous()
     if append_only and timestamp is None:
-        timestamp = time.strftime(SUMMARY_TIMESTAMP_FORMAT)
+        timestamp = _summary_now().strftime(SUMMARY_TIMESTAMP_FORMAT)
     text = build_summary_text(
         listings,
         title_template=title_template,
