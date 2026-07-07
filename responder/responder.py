@@ -335,8 +335,14 @@ def _apply_status(callback_id: str, chat_id: str, message: dict, code: str) -> N
         return
     # Reactions disabled / old API: fall back to editing the message text,
     # replacing any earlier status prefix and keeping the existing buttons.
+    # Telegram hands back `message.text` as DECODED plain text (e.g. `&amp;`
+    # becomes `&`), but edit_text always sends parse_mode=HTML, so re-escape
+    # before sending or `&`/`<`/`>` (e.g. URL query params) fail editMessageText
+    # silently. The strip runs on the decoded text (prefixes are literal), then
+    # we escape exactly once — repeated presses receive freshly-decoded text
+    # each time, so this never double-escapes.
     original = message.get("text") or ""
-    new_text = f"{prefix} {_strip_status_prefix(original)}".strip()
+    new_text = f"{prefix} {esc(_strip_status_prefix(original))}".strip()
     tg.edit_text(
         chat_id, message_id, new_text, reply_markup=message.get("reply_markup")
     )
