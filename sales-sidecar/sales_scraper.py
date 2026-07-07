@@ -386,7 +386,27 @@ def escape_html(text: str) -> str:
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _send(chat_ids_raw: str, text: str) -> list[dict]:
+def _status_button_row() -> list[dict]:
+    """One row of status buttons matching the responder's stateless handler.
+
+    Codes stay tiny (well under Telegram's 64-byte limit) and carry no id — the
+    responder (the bot's only getUpdates consumer) dispatches them statelessly
+    from the callback query's chat_id + message_id. Keep this JSON shape
+    identical to ``responder.tg.status_button_row``.
+    """
+    return [
+        {"text": "✅", "callback_data": "st:r"},  # gereageerd
+        {"text": "📅", "callback_data": "st:i"},  # uitgenodigd
+        {"text": "❌", "callback_data": "st:x"},  # afgewezen
+        {"text": "🗑", "callback_data": "st:d"},  # niet interessant (delete)
+    ]
+
+
+def _status_keyboard() -> dict:
+    return {"inline_keyboard": [_status_button_row()]}
+
+
+def _send(chat_ids_raw: str, text: str, *, reply_markup: dict | None = None) -> list[dict]:
     """Send a Telegram message and return [{"chat_id": ..., "message_id": ...}, ...]."""
     sent: list[dict] = []
     if not TELEGRAM_BOT_TOKEN:
@@ -396,14 +416,15 @@ def _send(chat_ids_raw: str, text: str) -> list[dict]:
         return sent
     api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for chat_id in chat_ids:
-        body = json.dumps(
-            {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-        ).encode()
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(
             api_url, data=body, headers={"Content-Type": "application/json"}
         )
@@ -437,7 +458,9 @@ def _listing_text(h: dict[str, str]) -> str:
 
 
 def notify_new_listing(h: dict[str, str]) -> list[dict]:
-    return _send(TELEGRAM_SALES_CHAT_IDS, _listing_text(h))
+    return _send(
+        TELEGRAM_SALES_CHAT_IDS, _listing_text(h), reply_markup=_status_keyboard()
+    )
 
 
 def send_telegram_alert(message: str) -> None:

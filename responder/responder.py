@@ -91,12 +91,14 @@ def _notification_text(house, method: str, detail: str, email: str) -> str:
 def _notification_keyboard(
     response_id: int, method: str, *, include_fill: bool = True
 ) -> dict:
+    # Brief (+ optional fill) keeps its own row; the status buttons go on a
+    # single row below it so the message only grows by one row.
     row = [{"text": "📋 Brief", "callback_data": f"brief:{response_id}"}]
     if method == "form" and include_fill:
         row.append(
             {"text": "✍️ Vul formulier in", "callback_data": f"fill:{response_id}"}
         )
-    return {"inline_keyboard": [row]}
+    return {"inline_keyboard": [row, tg.status_button_row()]}
 
 
 def _refresh_notification(
@@ -302,6 +304,69 @@ def _handle_message(message: dict) -> None:
         _propose_add_site(chat_id, match.group(0).rstrip(".,)"), sales=sales)
 
 
+# Status buttons: code -> (reaction emoji, text-fallback prefix emoji, label).
+# The reaction emoji come from Telegram's fixed bot-allowed set; the prefix
+# emoji mirror the button faces (✅/📅/❌) for the edit-text fallback.
+_STATUS_ACTIONS: dict[str, tuple[str, str, str]] = {
+    "r": ("✍", "✅", "gereageerd"),
+    "i": ("🤝", "📅", "uitgenodigd"),
+    "x": ("👎", "❌", "afgewezen"),
+}
+_STATUS_PREFIXES = tuple(prefix for _, prefix, _ in _STATUS_ACTIONS.values())
+
+
+def _strip_status_prefix(text: str) -> str:
+    """Drop a previously-added status emoji prefix from the first line."""
+    first, sep, rest = text.partition("\n")
+    for prefix in _STATUS_PREFIXES:
+        if first.startswith(prefix):
+            first = first[len(prefix):].lstrip()
+            break
+    return first + sep + rest
+
+
+def _apply_status(callback_id: str, chat_id: str, message: dict, code: str) -> None:
+    """React to (or, failing that, prefix-edit) the listing message."""
+    reaction, prefix, label = _STATUS_ACTIONS[code]
+    message_id = message.get("message_id")
+    toast = f"Status: {label} {reaction}"
+    if tg.set_reaction(chat_id, message_id, reaction):
+        tg.answer_callback(callback_id, toast)
+        return
+    # Reactions disabled / old API: fall back to editing the message text,
+    # replacing any earlier status prefix and keeping the existing buttons.
+    # Telegram hands back `message.text` as DECODED plain text (e.g. `&amp;`
+    # becomes `&`), but edit_text always sends parse_mode=HTML, so re-escape
+    # before sending or `&`/`<`/`>` (e.g. URL query params) fail editMessageText
+    # silently. The strip runs on the decoded text (prefixes are literal), then
+    # we escape exactly once — repeated presses receive freshly-decoded text
+    # each time, so this never double-escapes.
+    original = message.get("text") or ""
+    new_text = f"{prefix} {esc(_strip_status_prefix(original))}".strip()
+    tg.edit_text(
+        chat_id, message_id, new_text, reply_markup=message.get("reply_markup")
+    )
+    tg.answer_callback(callback_id, toast)
+
+
+def _dismiss_listing(callback_id: str, chat_id: str, message: dict) -> None:
+    """Delete the listing message and, for rentals, mark it dismissed so the
+    delisting recheck never touches it again. Stateless for koop messages."""
+    message_id = message.get("message_id")
+    tg.delete_message(chat_id, message_id)
+    db.mark_dismissed_by_message(chat_id, message_id)
+    tg.answer_callback(callback_id, "Verwijderd 🗑")
+
+
+def _handle_status(callback_id: str, chat_id: str, message: dict, code: str) -> None:
+    if code == "d":
+        _dismiss_listing(callback_id, chat_id, message)
+    elif code in _STATUS_ACTIONS:
+        _apply_status(callback_id, chat_id, message, code)
+    else:
+        tg.answer_callback(callback_id)
+
+
 def _handle_brief(chat_id: str, message_id: int, row) -> None:
     house = db.get_house(row["url"])
     if house is None:
@@ -352,6 +417,12 @@ def _handle_callback(callback: dict) -> None:
     if action == "siteno":
         db.kv_delete(f"addsite:{arg}")
         tg.answer_callback(callback_id, "Oké, niets gedaan")
+        return
+
+    if action == "st":
+        # Stateless: chat_id + message_id come from the callback query itself,
+        # so status buttons work on koop messages the responder never sent.
+        _handle_status(callback_id, chat_id, message, arg)
         return
 
     try:

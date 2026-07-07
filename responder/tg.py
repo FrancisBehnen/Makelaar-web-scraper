@@ -134,6 +134,44 @@ def answer_callback(callback_id: str, text: str | None = None) -> None:
     _call("answerCallbackQuery", params)
 
 
+# Status buttons shown under every listing notification (rental + koop). The
+# callback_data codes are kept tiny (well under Telegram's 64-byte limit) and
+# carry no listing id — dispatch is stateless (chat_id + message_id come from
+# the callback query), so the same row works on messages the responder never
+# sent (koop messages sent by the sales-sidecar).
+STATUS_BUTTONS: tuple[tuple[str, str], ...] = (
+    ("✅", "st:r"),  # gereageerd
+    ("📅", "st:i"),  # uitgenodigd
+    ("❌", "st:x"),  # afgewezen
+    ("🗑", "st:d"),  # niet interessant (delete)
+)
+
+
+def status_button_row() -> list[dict]:
+    """One row of status buttons (fresh list each call — never mutated)."""
+    return [{"text": emoji, "callback_data": data} for emoji, data in STATUS_BUTTONS]
+
+
+def set_reaction(chat_id: str, message_id: int, emoji: str) -> bool:
+    """Set the bot's single reaction on a message (Bot API 7.0+).
+
+    Returns True on success. Fails (returns False) when reactions are disabled
+    in the chat or the API is too old, so the caller can fall back to editing
+    the message text.
+    """
+    return (
+        _call(
+            "setMessageReaction",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reaction": [{"type": "emoji", "emoji": emoji}],
+            },
+        )
+        is not None
+    )
+
+
 def get_updates(offset: int | None) -> list[dict] | None:
     """Long-poll for updates; None means the call failed (back off)."""
     params: dict = {
