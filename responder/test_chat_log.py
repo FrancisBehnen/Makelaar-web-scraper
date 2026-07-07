@@ -106,6 +106,43 @@ def test_listing_url_submission_is_not_logged(rdb, monkeypatch):
     assert _chat_log_rows(rdb) == []
 
 
+def test_bare_url_submission_routes_to_add_site_not_logged(rdb, monkeypatch):
+    # A message that is *only* the URL is a bare add-site submission.
+    calls = []
+    monkeypatch.setattr(
+        responder, "_propose_add_site", lambda chat_id, url, **k: calls.append(url)
+    )
+    responder._handle_message(_message("https://foo.nl/huis/1"))
+    assert calls == ["https://foo.nl/huis/1"]
+    assert _chat_log_rows(rdb) == []
+
+
+def test_short_prefix_url_routes_to_add_site_not_logged(rdb, monkeypatch):
+    # URL plus a short (<=15 char) prefix still counts as a submission.
+    calls = []
+    monkeypatch.setattr(
+        responder, "_propose_add_site", lambda chat_id, url, **k: calls.append(url)
+    )
+    responder._handle_message(_message("check https://x.nl/woning/1"))
+    assert calls == ["https://x.nl/woning/1"]
+    assert _chat_log_rows(rdb) == []
+
+
+def test_sentence_mentioning_url_is_logged_not_add_site(rdb, monkeypatch):
+    # Prose that merely mentions a link (>15 surrounding chars) is an issue
+    # report: it is logged and never opens an add-site request.
+    calls = []
+    monkeypatch.setattr(
+        responder, "_propose_add_site", lambda *a, **k: calls.append(a)
+    )
+    report = "de knop bij https://foo.nl/huis/1 werkt niet meer"
+    responder._handle_message(_message(report))
+    assert calls == []
+    rows = _chat_log_rows(rdb)
+    assert len(rows) == 1
+    assert rows[0]["text"] == report
+
+
 def test_commands_are_not_logged(rdb, monkeypatch):
     monkeypatch.setattr(responder, "_send_status", lambda chat_id: None)
     monkeypatch.setattr(responder, "_send_help", lambda chat_id: None)

@@ -39,6 +39,12 @@ log = logging.getLogger("responder")
 
 URL_RE = re.compile(r'https?://[^\s<>"]+')
 
+# A message counts as a bare-URL add-site submission when the text is just the
+# URL plus at most this many characters of surrounding text (a short prefix
+# and/or trailing punctuation). More surrounding text means it's prose that
+# merely mentions a link (an issue report) and is chat-logged instead.
+_MAX_ADD_SITE_SURROUNDING = 15
+
 STATUS_EMOJI = {
     "detecting": "🔍",
     "notified": "🆕",
@@ -336,10 +342,15 @@ def _handle_message(message: dict) -> None:
         _send_status(chat_id)
         return
     match = URL_RE.search(text)
-    if match:
+    if match and len(text) - len(match.group(0)) <= _MAX_ADD_SITE_SURROUNDING:
+        # Bare-URL submission: the message is essentially just the listing link
+        # (the URL plus at most _MAX_ADD_SITE_SURROUNDING characters of trivial
+        # surrounding text, e.g. a short "check "/"kijk " prefix or trailing
+        # punctuation). Longer prose that merely *mentions* a link (an issue
+        # report like "de knop bij <url> werkt niet") falls through to logging.
         _propose_add_site(chat_id, match.group(0).rstrip(".,)"), sales=sales)
         return
-    # Not a command or listing-URL submission: an issue report / free-text
+    # Not a command or bare-URL submission: an issue report / free-text
     # message. Log it for the daily end-of-day maintenance agent to pick up.
     _log_chat_message(message)
 
