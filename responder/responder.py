@@ -18,6 +18,7 @@ import queue
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import config
@@ -281,6 +282,41 @@ def _propose_add_site(chat_id: str, url: str, *, sales: bool = False) -> None:
     )
 
 
+def _log_chat_message(message: dict) -> None:
+    """Persist a free-text group message for the daily maintenance agent.
+
+    Only reached for messages not consumed by any other flow (commands,
+    listing-URL submissions). Bot messages are skipped. Wrapped defensively so a
+    logging failure never breaks the update loop.
+    """
+    sender = message.get("from") or {}
+    if sender.get("is_bot"):
+        return
+    text = (message.get("text") or "").strip()
+    if not text:
+        return
+    name = " ".join(
+        p for p in (sender.get("first_name"), sender.get("last_name")) if p
+    )
+    ts_epoch = message.get("date")
+    ts = (
+        datetime.fromtimestamp(ts_epoch, tz=timezone.utc).isoformat()
+        if ts_epoch
+        else datetime.now(timezone.utc).isoformat()
+    )
+    try:
+        db.log_chat_message(
+            chat_id=str(message.get("chat", {}).get("id", "")),
+            message_id=message.get("message_id"),
+            sender_name=name,
+            sender_username=sender.get("username") or "",
+            ts=ts,
+            text=text,
+        )
+    except Exception:
+        log.exception("Failed to log chat message")
+
+
 def _handle_message(message: dict) -> None:
     chat_id = str(message.get("chat", {}).get("id", ""))
     is_rentals = chat_id in config.TELEGRAM_CHAT_IDS
@@ -302,6 +338,10 @@ def _handle_message(message: dict) -> None:
     match = URL_RE.search(text)
     if match:
         _propose_add_site(chat_id, match.group(0).rstrip(".,)"), sales=sales)
+        return
+    # Not a command or listing-URL submission: an issue report / free-text
+    # message. Log it for the daily end-of-day maintenance agent to pick up.
+    _log_chat_message(message)
 
 
 # Status buttons: code -> (reaction emoji, text-fallback prefix emoji, label).
@@ -596,6 +636,12 @@ def worker_loop() -> None:
 def main() -> None:
     os.makedirs(config.SCREENSHOT_DIR, exist_ok=True)
     db.init_schema()
+    try:
+        purged = db.purge_old_chat_log()
+        if purged:
+            log.info("Purged %d chat_log row(s) older than 14 days", purged)
+    except Exception:
+        log.exception("chat_log purge failed")
     log.info(
         "Responder starting (%d notification chat(s) configured)",
         len(config.TELEGRAM_CHAT_IDS),
