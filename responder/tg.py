@@ -1,41 +1,25 @@
-"""Thin Telegram Bot API client (plain HTTP, no bot framework)."""
+"""Thin Telegram Bot API wrapper for the responder.
 
-import json
+The HTTP plumbing and the status-button keyboard live in ``shared.tg`` (reused
+by the sales-sidecar). This module binds a single client to the responder's bot
+token and exposes the broadcast/alert helpers scoped to the configured chats.
+"""
+
 import logging
 
-import requests
+from shared.tg import (  # noqa: F401  (re-exported for callers/tests)
+    STATUS_BUTTONS,
+    TelegramClient,
+    escape_html,
+    status_button_row,
+    status_keyboard,
+)
 
 from config import TELEGRAM_ALERT_CHAT_IDS, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS
 
 log = logging.getLogger("responder")
 
-_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-
-def _call(method: str, params: dict, *, files=None, timeout: int = 15):
-    if not TELEGRAM_BOT_TOKEN:
-        log.warning("Telegram not configured, dropping %s", method)
-        return None
-    try:
-        if files:
-            # Multipart request: complex params must be JSON-encoded strings.
-            data = {
-                k: json.dumps(v) if isinstance(v, (dict, list)) else v
-                for k, v in params.items()
-            }
-            resp = requests.post(
-                f"{_API}/{method}", data=data, files=files, timeout=timeout
-            )
-        else:
-            resp = requests.post(f"{_API}/{method}", json=params, timeout=timeout)
-        payload = resp.json()
-    except Exception as exc:
-        log.error("Telegram %s failed: %s", method, exc)
-        return None
-    if not payload.get("ok"):
-        log.error("Telegram %s rejected: %s", method, payload.get("description"))
-        return None
-    return payload["result"]
+_client = TelegramClient(TELEGRAM_BOT_TOKEN, log=log)
 
 
 def send_message(
@@ -45,19 +29,9 @@ def send_message(
     reply_markup: dict | None = None,
     reply_to: int | None = None,
 ) -> int | None:
-    params: dict = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    if reply_markup:
-        params["reply_markup"] = reply_markup
-    if reply_to:
-        params["reply_to_message_id"] = reply_to
-        params["allow_sending_without_reply"] = True
-    result = _call("sendMessage", params)
-    return result["message_id"] if result else None
+    return _client.send_message(
+        chat_id, text, reply_markup=reply_markup, reply_to=reply_to
+    )
 
 
 def broadcast(text: str, *, reply_markup: dict | None = None) -> dict[str, int]:
@@ -77,18 +51,9 @@ def send_photo(
     *,
     reply_markup: dict | None = None,
 ) -> int | None:
-    # Captions are plain text (no parse_mode) so screenshots never fail on
-    # markup in form values; max caption length is 1024.
-    params: dict = {"chat_id": chat_id, "caption": caption[:1024]}
-    if reply_markup:
-        params["reply_markup"] = reply_markup
-    try:
-        with open(photo_path, "rb") as fh:
-            result = _call("sendPhoto", params, files={"photo": fh}, timeout=60)
-    except OSError as exc:
-        log.error("Cannot read screenshot %s: %s", photo_path, exc)
-        return None
-    return result["message_id"] if result else None
+    return _client.send_photo(
+        chat_id, photo_path, caption, reply_markup=reply_markup
+    )
 
 
 def broadcast_photo(
@@ -107,80 +72,23 @@ def broadcast_photo(
 def edit_text(
     chat_id: str, message_id: int, text: str, *, reply_markup: dict | None = None
 ) -> None:
-    params: dict = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    if reply_markup is not None:
-        params["reply_markup"] = reply_markup
-    _call("editMessageText", params)
+    _client.edit_text(chat_id, message_id, text, reply_markup=reply_markup)
 
 
 def delete_message(chat_id: str, message_id: int) -> bool:
-    """Delete a previously sent message. Telegram only allows this within 48h;
-    after that the API rejects it — treat that (and any error) as a soft failure
-    so the caller can still mark the listing as gone."""
-    result = _call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
-    return bool(result)
+    return _client.delete_message(chat_id, message_id)
 
 
 def answer_callback(callback_id: str, text: str | None = None) -> None:
-    params: dict = {"callback_query_id": callback_id}
-    if text:
-        params["text"] = text
-    _call("answerCallbackQuery", params)
-
-
-# Status buttons shown under every listing notification (rental + koop). The
-# callback_data codes are kept tiny (well under Telegram's 64-byte limit) and
-# carry no listing id — dispatch is stateless (chat_id + message_id come from
-# the callback query), so the same row works on messages the responder never
-# sent (koop messages sent by the sales-sidecar).
-STATUS_BUTTONS: tuple[tuple[str, str], ...] = (
-    ("✅", "st:r"),  # gereageerd
-    ("📅", "st:i"),  # uitgenodigd
-    ("❌", "st:x"),  # afgewezen
-    ("🗑", "st:d"),  # niet interessant (delete)
-)
-
-
-def status_button_row() -> list[dict]:
-    """One row of status buttons (fresh list each call — never mutated)."""
-    return [{"text": emoji, "callback_data": data} for emoji, data in STATUS_BUTTONS]
+    _client.answer_callback(callback_id, text)
 
 
 def set_reaction(chat_id: str, message_id: int, emoji: str) -> bool:
-    """Set the bot's single reaction on a message (Bot API 7.0+).
-
-    Returns True on success. Fails (returns False) when reactions are disabled
-    in the chat or the API is too old, so the caller can fall back to editing
-    the message text.
-    """
-    return (
-        _call(
-            "setMessageReaction",
-            {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "reaction": [{"type": "emoji", "emoji": emoji}],
-            },
-        )
-        is not None
-    )
+    return _client.set_reaction(chat_id, message_id, emoji)
 
 
 def get_updates(offset: int | None) -> list[dict] | None:
-    """Long-poll for updates; None means the call failed (back off)."""
-    params: dict = {
-        "timeout": 50,
-        "allowed_updates": ["message", "callback_query"],
-    }
-    if offset is not None:
-        params["offset"] = offset
-    return _call("getUpdates", params, timeout=60)
+    return _client.get_updates(offset)
 
 
 def send_alert(text: str) -> None:

@@ -6,12 +6,17 @@ page 404/410s or its body carries a Dutch rented-out status phrase. For those we
 delete the original Telegram notification message(s) and send one short summary
 of everything removed this cycle (mirrors the sales-sidecar mechanism).
 
+The shared machinery (page-scoped detection, the round-robin recheck loop and
+the replaceable summary) lives in ``shared.lifecycle``; this module supplies the
+rental specifics: the cookie-safe HTTP fetch (huurstunt session), the rental
+status vocabulary, and the ``responses``-table accessors.
+
 Detection is deliberately conservative: a listing wrongly deleted is worse than
 one lingering. Server-rendered detail pages routinely embed "gerelateerd
 aanbod" / "recent verhuurd" carousels whose *other* cards carry badges like
 "verhuurd onder voorbehoud" or "onder optie". A whole-body regex would treat a
 still-live listing as gone the moment such a neighbour appears, so detection is
-page-scoped instead:
+page-scoped (see ``shared.lifecycle.reads_gone``):
 
   * sidebar/footer carousels are stripped before matching;
   * unambiguous "this listing" phrases ("deze woning is verhuurd",
@@ -26,7 +31,6 @@ A missed detection is acceptable; a false deletion is not.
 import json
 import logging
 import re
-import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
@@ -34,23 +38,13 @@ import config
 import db
 import tg
 from letter import escape_html as esc
+from shared import lifecycle
 
 log = logging.getLogger("responder")
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
-
-# HTTP statuses that mean the listing page is gone for good.
-_GONE_HTTP_CODES = frozenset({404, 410})
-
-# Sidebar / footer carousels ("gerelateerd aanbod", "recent verhuurd") hold
-# OTHER listings' cards. Their status badges must never be read as the primary
-# listing's status, so these blocks are removed before matching.
-_SIDEBAR_RE = re.compile(
-    r"<(aside|footer)\b[^>]*>.*?</\1>",
-    re.IGNORECASE | re.DOTALL,
 )
 
 # Unambiguous, page-scoped "this listing is rented / withdrawn" phrases. They
@@ -66,16 +60,17 @@ _PAGE_STATUS_RE = re.compile(
 )
 
 # Standalone status badges. These also appear on other listings' cards, so they
-# are only trusted inside the page's header region (see _header_region).
+# are only trusted inside the page's header region.
 _BADGE_STATUS_RE = re.compile(
     r"verhuurd onder voorbehoud|onder optie",
     re.IGNORECASE,
 )
 
-# Window (chars) around the listing's <h1> in which a bare status badge counts.
-_HEADER_REGION = 1500
-
 _GONE_SUMMARY_KV = "gone_summary_ids"
+_SUMMARY_TITLE = (
+    "\U0001f5d1 <b>{count} {word} niet meer beschikbaar — "
+    "bericht(en) verwijderd</b>"
+)
 
 
 def _registrable_domain(url: str) -> str:
@@ -117,19 +112,11 @@ def _fetch(req: urllib.request.Request):
     return _OPENER.open(req, timeout=15)
 
 
-def _header_region(body: str) -> str:
-    """Return the slice around the listing's <h1> where a badge is trusted."""
-    m = re.search(r"<h1\b", body, re.IGNORECASE)
-    start = m.start() if m else 0
-    return body[start : start + _HEADER_REGION]
-
-
-def _reads_gone(html: str) -> bool:
-    """Page-scoped rented-out detection (see module docstring)."""
-    body = _SIDEBAR_RE.sub(" ", html)
-    if _PAGE_STATUS_RE.search(body):
-        return True
-    return bool(_BADGE_STATUS_RE.search(_header_region(body)))
+def _fetch_body(url: str) -> bytes:
+    """Fetch ``url`` through the cookie-safe opener; may raise HTTPError."""
+    req = urllib.request.Request(url, headers=_headers(url))
+    with _fetch(req) as resp:
+        return resp.read()
 
 
 def is_gone(url: str) -> bool:
@@ -139,13 +126,12 @@ def is_gone(url: str) -> bool:
     error surfaced as a non-HTTP exception) returns False. Network exceptions
     propagate so the caller can skip without marking the listing gone.
     """
-    req = urllib.request.Request(url, headers=_headers(url))
-    try:
-        with _fetch(req) as resp:
-            body = resp.read()
-    except urllib.error.HTTPError as exc:
-        return exc.code in _GONE_HTTP_CODES
-    return _reads_gone(body.decode("utf-8", errors="ignore"))
+    return lifecycle.is_gone(
+        url,
+        fetch=_fetch_body,
+        page_status_re=_PAGE_STATUS_RE,
+        badge_status_re=_BADGE_STATUS_RE,
+    )
 
 
 def _delete_listing_messages(row) -> str | None:
@@ -164,36 +150,33 @@ def _delete_listing_messages(row) -> str | None:
 def recheck_delisted() -> list[str]:
     """Re-check a batch of available listings; return addresses newly removed."""
     rows = db.available_listings(config.RECHECK_BATCH_SIZE)
-    removed: list[str] = []
-    for row in rows:
+    return lifecycle.run_recheck(
+        rows,
         # Advance the round-robin cursor first, so a persistently failing URL
         # never blocks the front of the queue.
-        db.touch_listing_checked(row["id"])
-        try:
-            gone = is_gone(row["url"])
-        except Exception as exc:
-            log.debug("Recheck fetch of %s failed: %s", row["url"], exc)
-            continue
-        if gone:
-            addr = _delete_listing_messages(row)
-            if addr is not None:
-                removed.append(addr)
-    return removed
+        mark_checked=lambda row: db.touch_listing_checked(row["id"]),
+        gone=lambda row: is_gone(row["url"]),
+        on_gone=_delete_listing_messages,
+        on_error=lambda row, exc: log.debug(
+            "Recheck fetch of %s failed: %s", row["url"], exc
+        ),
+    )
 
 
 def send_gone_summary(addresses: list[str]) -> None:
     """Send one summary of removed listings, replacing the previous summary."""
     prev = db.kv_get(_GONE_SUMMARY_KV)
-    if prev:
-        for chat_id, message_id in json.loads(prev).items():
-            tg.delete_message(str(chat_id), message_id)
 
-    count = len(addresses)
-    word = "woning" if count == 1 else "woningen"
-    listing_lines = "\n".join(f"• {esc(a)}" for a in addresses)
-    text = (
-        f"\U0001f5d1 <b>{count} {word} niet meer beschikbaar — "
-        f"bericht(en) verwijderd</b>\n\n{listing_lines}"
+    def delete_previous() -> None:
+        if prev:
+            for chat_id, message_id in json.loads(prev).items():
+                tg.delete_message(str(chat_id), message_id)
+
+    message_ids = lifecycle.send_replaceable_summary(
+        addresses,
+        title_template=_SUMMARY_TITLE,
+        escape=esc,
+        delete_previous=delete_previous,
+        broadcast=lambda text: tg.broadcast(text),
     )
-    message_ids = tg.broadcast(text)
     db.kv_set(_GONE_SUMMARY_KV, json.dumps(message_ids))

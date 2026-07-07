@@ -1,3 +1,5 @@
 dist/
 node_modules/
 db.sqlite
+**/__pycache__/
+**/.pytest_cache/
