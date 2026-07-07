@@ -44,6 +44,17 @@ SIDEBAR_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Non-content blocks whose text is never visible listing status. React/SPA
+# bundles routinely embed an i18n string table (with phrases like
+# "deze woning is niet meer beschikbaar") inside <script> on EVERY page,
+# including live listings — matching those would mark every page gone. These
+# blocks are stripped before any phrase/badge matching. The trailing
+# ``(?:</\1>|\Z)`` alternative tolerates an unclosed tag (strip to end of body).
+SCRIPT_RE = re.compile(
+    r"<(script|style|noscript|template)\b[^>]*>.*?(?:</\1>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def header_region(body: str, window: int = DEFAULT_HEADER_REGION) -> str:
     """Return the slice around the listing's <h1> where a badge is trusted."""
@@ -62,10 +73,13 @@ def reads_gone(
     """Page-scoped gone/sold detection (see module docstring).
 
     ``page_status_re`` matches unambiguous "this listing" phrases anywhere in the
-    body (after stripping sidebar/footer carousels). ``badge_status_re`` matches
-    bare status badges but only inside the page's header region.
+    body (after stripping <script>/<style>/<noscript>/<template> blocks — which
+    on SPA pages embed an i18n string table — and sidebar/footer carousels).
+    ``badge_status_re`` matches bare status badges but only inside the page's
+    header region (also computed from the script-free body).
     """
-    body = SIDEBAR_RE.sub(" ", html)
+    body = SCRIPT_RE.sub(" ", html)
+    body = SIDEBAR_RE.sub(" ", body)
     if page_status_re is not None and page_status_re.search(body):
         return True
     return bool(badge_status_re.search(header_region(body, window)))

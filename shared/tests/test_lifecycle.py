@@ -67,6 +67,74 @@ def test_reads_gone_none_page_re_only_badges():
 
 
 # ---------------------------------------------------------------------------
+# script/style stripping (vbtverhuurmakelaars false-positive regression)
+# ---------------------------------------------------------------------------
+
+# vbt is a React app whose JS bundle embeds an i18n string table on EVERY page,
+# including a `propertyNotFound` string that reads like a genuine gone phrase.
+# The page-status regex must NOT match it inside a <script> block.
+VBT_PAGE_RE = re.compile(r"niet meer beschikbaar", re.IGNORECASE)
+
+
+def test_reads_gone_ignores_phrase_inside_script():
+    # A LIVE vbt listing (HTTP 200) whose i18n table lives in the JS bundle, not
+    # in visible body text. Must NOT read as gone.
+    body = (
+        "<html><head>"
+        '<script>window.__i18n={inactivepage:"Helaas, deze pagina is niet '
+        '(meer) beschikbaar",propertyNotFound:"Helaas, deze woning is niet '
+        'meer beschikbaar",foo:"bar"}</script></head>'
+        "<body><main><h1>Kerkstraat 12</h1>"
+        "Te huur, 3 kamers, beschikbaar per direct</main></body></html>"
+    )
+    assert not lifecycle.reads_gone(
+        body, page_status_re=VBT_PAGE_RE, badge_status_re=BADGE_RE
+    )
+
+
+def test_reads_gone_true_for_visible_gone_phrase():
+    # Same phrase, but now in visible body text -> genuinely gone.
+    body = (
+        "<html><body><main><h1>Kerkstraat 12</h1>"
+        "Helaas, deze woning is niet meer beschikbaar</main></body></html>"
+    )
+    assert lifecycle.reads_gone(
+        body, page_status_re=VBT_PAGE_RE, badge_status_re=BADGE_RE
+    )
+
+
+def test_reads_gone_ignores_phrase_inside_style_and_noscript():
+    style_body = (
+        "<html><head><style>/* niet meer beschikbaar */</style></head>"
+        "<body><main><h1>x</h1>beschikbaar</main></body></html>"
+    )
+    noscript_body = (
+        "<html><body><main><h1>x</h1>beschikbaar"
+        "<noscript>niet meer beschikbaar</noscript></main></body></html>"
+    )
+    assert not lifecycle.reads_gone(
+        style_body, page_status_re=VBT_PAGE_RE, badge_status_re=BADGE_RE
+    )
+    assert not lifecycle.reads_gone(
+        noscript_body, page_status_re=VBT_PAGE_RE, badge_status_re=BADGE_RE
+    )
+
+
+def test_reads_gone_ignores_badge_inside_script():
+    # The header-region badge match must also run on script-free text: a bare
+    # badge string embedded in an inline <script> right after the <h1> must not
+    # trip detection.
+    body = (
+        "<html><body><main><h1>Kerkstraat 12</h1>"
+        '<script>var labels={status:"verhuurd onder voorbehoud"}</script>'
+        "Te huur, beschikbaar</main></body></html>"
+    )
+    assert not lifecycle.reads_gone(
+        body, page_status_re=VBT_PAGE_RE, badge_status_re=BADGE_RE
+    )
+
+
+# ---------------------------------------------------------------------------
 # is_gone (fetch + HTTP-code mapping)
 # ---------------------------------------------------------------------------
 
