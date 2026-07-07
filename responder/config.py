@@ -47,6 +47,13 @@ HUURSTUNT_COOKIE = os.environ.get("HUURSTUNT_COOKIE", "").strip()
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
 
+# Delisting re-check: every RECHECK_INTERVAL seconds a batch of previously
+# notified, still "available" listings is re-fetched over plain HTTP to spot
+# ones that have been rented out / removed, so their Telegram notification can
+# be deleted and a short summary sent (mirrors the sales-sidecar mechanism).
+RECHECK_INTERVAL = int(os.environ.get("RENTAL_RECHECK_INTERVAL", "600"))
+RECHECK_BATCH_SIZE = int(os.environ.get("RENTAL_RECHECK_BATCH_SIZE", "5"))
+
 # Only one Camoufox instance may run at a time (VPS memory). Both contact
 # detection (StealthyFetcher) and the form-fill jobs take this lock around
 # any browser use.

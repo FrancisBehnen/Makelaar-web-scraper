@@ -39,13 +39,32 @@ def init_schema() -> None:
             screenshot_path TEXT,
             tg_message_ids TEXT,
             error TEXT,
+            listing_status TEXT NOT NULL DEFAULT 'available',
+            last_checked_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """
     )
     c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+    _migrate_responses(c)
     c.commit()
+
+
+def _migrate_responses(c: sqlite3.Connection) -> None:
+    """Add the delisting columns to pre-existing deployments (ALTER TABLE).
+
+    ``listing_status`` tracks availability separately from the contact-flow
+    ``status`` column: a listing can be status='sent' yet later go 'gone'.
+    """
+    cols = {row["name"] for row in c.execute("PRAGMA table_info(responses)")}
+    if "listing_status" not in cols:
+        c.execute(
+            "ALTER TABLE responses "
+            "ADD COLUMN listing_status TEXT NOT NULL DEFAULT 'available'"
+        )
+    if "last_checked_at" not in cols:
+        c.execute("ALTER TABLE responses ADD COLUMN last_checked_at TEXT")
 
 
 def kv_get(key: str) -> str | None:
@@ -185,3 +204,49 @@ def recent_responses(limit: int = 15) -> list[sqlite3.Row]:
         """,
         (limit,),
     ).fetchall()
+
+
+def available_listings(limit: int) -> list[sqlite3.Row]:
+    """Batch of still-available, previously-notified listings to re-check.
+
+    Only rows that were actually announced (``tg_message_ids`` set) and are not
+    seeded/duplicate/cancelled are eligible. Ordered by ``last_checked_at`` so
+    the least-recently-checked listings (NULLs, i.e. never checked, come first
+    in SQLite ASC) are picked, giving a round-robin over the whole table.
+    """
+    if not _houses_table_exists():
+        return []
+    return conn().execute(
+        """
+        SELECT r.id, r.url, r.tg_message_ids, h.straatnaamHuisnummer
+        FROM responses r
+        LEFT JOIN houses h ON h.url = r.url
+        WHERE r.listing_status = 'available'
+          AND r.tg_message_ids IS NOT NULL
+          AND r.tg_message_ids NOT IN ('', '{}')
+          AND r.status NOT IN ('seeded', 'duplicate', 'cancelled')
+        ORDER BY r.last_checked_at ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def touch_listing_checked(response_id: int) -> None:
+    c = conn()
+    c.execute(
+        "UPDATE responses SET last_checked_at = datetime('now') WHERE id = ?",
+        (response_id,),
+    )
+    c.commit()
+
+
+def mark_listing_gone(response_id: int) -> None:
+    c = conn()
+    c.execute(
+        "UPDATE responses SET listing_status = 'gone', "
+        "last_checked_at = datetime('now'), updated_at = datetime('now') "
+        "WHERE id = ?",
+        (response_id,),
+    )
+    c.commit()
