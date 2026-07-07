@@ -505,10 +505,11 @@ def _delete_message(chat_id: str, message_id: int) -> bool:
         return False
 
 
-def _delete_listing_messages(conn, url: str) -> str | None:
+def _delete_listing_messages(conn, url: str) -> tuple[str, str] | None:
     """Delete Telegram messages for a listing and mark it as sold.
 
-    Returns the address string if the listing was transitioned, else None.
+    Returns an ``(address, url)`` pair if the listing was transitioned, else
+    None.
     """
     row = conn.execute(
         "SELECT tg_message_ids, status, straatnaamHuisnummer FROM sales WHERE url = ?",
@@ -528,19 +529,19 @@ def _delete_listing_messages(conn, url: str) -> str | None:
     conn.commit()
 
     log.info("Marked sold and deleted TG message(s): %s (%s)", addr, url)
-    return addr or url
+    return addr or url, url
 
 
-def process_sold_urls(conn, sold_urls: set[str]) -> list[str]:
+def process_sold_urls(conn, sold_urls: set[str]) -> list[tuple[str, str]]:
     """Check sold URLs against DB and delete Telegram messages for matches.
 
-    Returns list of addresses that were transitioned to sold.
+    Returns a list of ``(address, url)`` pairs that were transitioned to sold.
     """
-    removed: list[str] = []
+    removed: list[tuple[str, str]] = []
     for url in sold_urls:
-        addr = _delete_listing_messages(conn, url)
-        if addr is not None:
-            removed.append(addr)
+        entry = _delete_listing_messages(conn, url)
+        if entry is not None:
+            removed.append(entry)
     return removed
 
 
@@ -577,13 +578,14 @@ def _touch_checked(conn, url: str) -> None:
     conn.commit()
 
 
-def recheck_available_listings(conn) -> list[str]:
+def recheck_available_listings(conn) -> list[tuple[str, str]]:
     """Re-fetch a batch of available listings via plain HTTP and check status.
 
     Universal fallback for sources where sold detection doesn't happen during
     the normal scrape (sitemap detail pages, Funda, etc.). Uses the responder's
     round-robin cursor (least-recently-checked first, cursor advanced before the
-    fetch) and its page-scoped detection. Returns addresses transitioned to sold.
+    fetch) and its page-scoped detection. Returns ``(address, url)`` pairs
+    transitioned to sold.
     """
     rows = conn.execute(
         "SELECT url FROM sales WHERE status = 'available' "
@@ -605,8 +607,12 @@ _SOLD_SUMMARY_TITLE = (
 )
 
 
-def _send_sold_summary(addresses: list[str]) -> None:
-    """Send a summary of removed listings and delete the previous summary."""
+def _send_sold_summary(listings: list[tuple[str, str]]) -> None:
+    """Send a summary of removed listings and delete the previous summary.
+
+    ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
+    address to its listing URL.
+    """
     global _last_sold_summary_ids
 
     def delete_previous() -> None:
@@ -614,7 +620,7 @@ def _send_sold_summary(addresses: list[str]) -> None:
             _delete_message(str(entry["chat_id"]), entry["message_id"])
 
     _last_sold_summary_ids = lifecycle.send_replaceable_summary(
-        addresses,
+        listings,
         title_template=_SOLD_SUMMARY_TITLE,
         escape=escape_html,
         delete_previous=delete_previous,
