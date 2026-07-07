@@ -5,6 +5,7 @@ The scrapers own the ``houses`` table; this service owns ``responses`` and
 WAL mode keeps the file shareable between all three containers.
 """
 
+import json
 import sqlite3
 import threading
 
@@ -250,3 +251,29 @@ def mark_listing_gone(response_id: int) -> None:
         (response_id,),
     )
     c.commit()
+
+
+def mark_dismissed_by_message(chat_id: str, message_id: int) -> bool:
+    """Mark the listing whose Telegram notification matches as ``dismissed``.
+
+    Looked up statelessly by (chat_id, message_id) — the pair a 🗑 callback
+    carries. ``dismissed`` is excluded from ``available_listings`` so the
+    delisting recheck never touches (or re-deletes) it. Returns True when a
+    rental listing matched; False for koop messages (no responder-owned row).
+    """
+    c = conn()
+    rows = c.execute(
+        "SELECT id, tg_message_ids FROM responses "
+        "WHERE tg_message_ids IS NOT NULL AND tg_message_ids NOT IN ('', '{}')"
+    ).fetchall()
+    for row in rows:
+        ids = json.loads(row["tg_message_ids"] or "{}")
+        if str(ids.get(str(chat_id))) == str(message_id):
+            c.execute(
+                "UPDATE responses SET listing_status = 'dismissed', "
+                "updated_at = datetime('now') WHERE id = ?",
+                (row["id"],),
+            )
+            c.commit()
+            return True
+    return False
