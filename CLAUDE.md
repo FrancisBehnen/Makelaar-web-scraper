@@ -29,7 +29,9 @@ Fetch infra (retry-once + self-restart watchdog) and the StealthyFetcher parsers
 
 Writes to its **own** SQLite file (`data/sales.sqlite`, table `sales`, WAL) — it never touches the rental `db.sqlite`. Cross-source dedup by normalized address+city; first run seeds the table silently (no notifications); restarts never re-notify.
 
-Key env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SALES_CHAT_IDS` (comma-separated koop group), `TELEGRAM_ALERT_CHAT_IDS` (optional, falls back to sales group), `SALES_DB_PATH` (default `data/sales.sqlite`), `CHECK_INTERVAL` (default 600), `DEBUG_DUMP`.
+**Auto-deletion of sold listings** — when a listing transitions to "onder bod", "verkocht onder voorbehoud", or "verkocht", the bot deletes its Telegram notification message so the group only shows actionable listings. The `sales` table stores `tg_message_ids` (JSON list of `{chat_id, message_id}` pairs from the Telegram `sendMessage` response) and a `status` column (`available` → `sold`). Detection happens at three levels: (1) **in-cycle** — JSON feeds report `statusOrig`, Realworks URLs switch from `/koop/` to `/verkocht/`, and card-based sources (Olsthoorn, De Bruyn en Tak) surface sold badges; (2) **sitemap re-check** — each sitemap scraper (Prinsenstad, Frisia, Marloes, PSG Wonen) re-fetches up to `RECHECK_BATCH_SIZE` existing detail pages per cycle and the parser records sold URLs; (3) **universal fallback** — `recheck_available_listings()` fetches a batch of DB listings via plain HTTP and regex-matches `_SOLD_STATUS_RE` in the response body, covering Funda and any other source. The DB schema auto-migrates (ALTER TABLE) on existing deployments.
+
+Key env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SALES_CHAT_IDS` (comma-separated koop group), `TELEGRAM_ALERT_CHAT_IDS` (optional, falls back to sales group), `SALES_DB_PATH` (default `data/sales.sqlite`), `CHECK_INTERVAL` (default 600), `RECHECK_BATCH_SIZE` (default 5), `DEBUG_DUMP`.
 
 ## Hostinger VPS
 
