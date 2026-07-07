@@ -1,6 +1,7 @@
 """Tests for the Delft koop sales scraper."""
 
 import json
+import sqlite3
 
 import pytest
 
@@ -123,7 +124,12 @@ def db(tmp_path, monkeypatch):
 @pytest.fixture()
 def notifications(monkeypatch):
     sent: list[dict[str, str]] = []
-    monkeypatch.setattr(s, "notify_new_listing", lambda h: sent.append(h))
+
+    def _fake_notify(h):
+        sent.append(h)
+        return []
+
+    monkeypatch.setattr(s, "notify_new_listing", _fake_notify)
     return sent
 
 
@@ -1185,3 +1191,418 @@ def test_psgwonen_koop_filters_delft_from_sitemap(monkeypatch):
     assert len(houses) == 1
     assert houses[0]["straatnaamHuisnummer"] == "Voorstraat 1"
     assert houses[0]["plaats"] == "Delft"
+
+
+# ---------------------------------------------------------------------------
+# DB schema migration (tg_message_ids + status columns)
+# ---------------------------------------------------------------------------
+
+
+def test_init_db_creates_new_columns(tmp_path, monkeypatch):
+    monkeypatch.setattr(s, "DB_PATH", str(tmp_path / "sales.sqlite"))
+    conn = s.init_db()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
+    assert "tg_message_ids" in cols
+    assert "status" in cols
+    conn.close()
+
+
+def test_init_db_migrates_existing_table(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "sales.sqlite")
+    monkeypatch.setattr(s, "DB_PATH", db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE sales (
+            url TEXT PRIMARY KEY,
+            straatnaamHuisnummer TEXT,
+            plaats TEXT,
+            vraagprijs TEXT,
+            oppervlakte TEXT,
+            kamers TEXT
+        )
+    """)
+    conn.execute(
+        "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?)",
+        ("https://a.nl/1", "Voorstraat 1", "Delft", "€ 250.000", "80 m²", "3 kamers"),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = s.init_db()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
+    assert "tg_message_ids" in cols
+    assert "status" in cols
+    row = conn.execute("SELECT tg_message_ids, status FROM sales").fetchone()
+    assert row == ("", "available")
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Telegram message ID storage and deletion
+# ---------------------------------------------------------------------------
+
+
+def test_send_returns_message_ids(monkeypatch):
+    monkeypatch.setattr(s, "TELEGRAM_BOT_TOKEN", "fake-token")
+
+    def fake_urlopen(req, timeout=10):
+        class FakeResp:
+            def read(self):
+                return json.dumps(
+                    {"ok": True, "result": {"message_id": 42}}
+                ).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+        return FakeResp()
+
+    monkeypatch.setattr(s.urllib.request, "urlopen", fake_urlopen)
+    result = s._send("-100123", "hello")
+    assert len(result) == 1
+    assert result[0]["chat_id"] == "-100123"
+    assert result[0]["message_id"] == 42
+
+
+def test_send_returns_empty_on_failure(monkeypatch):
+    monkeypatch.setattr(s, "TELEGRAM_BOT_TOKEN", "fake-token")
+
+    def fake_urlopen(req, timeout=10):
+        raise Exception("network error")
+
+    monkeypatch.setattr(s.urllib.request, "urlopen", fake_urlopen)
+    result = s._send("-100123", "hello")
+    assert result == []
+
+
+def test_process_houses_stores_message_ids(db, monkeypatch):
+    sent_ids = [{"chat_id": "-100", "message_id": 99}]
+    monkeypatch.setattr(s, "notify_new_listing", lambda h: sent_ids)
+    h = _house(url="https://a.nl/1")
+    existing = s.get_existing_urls(db)
+    s.process_houses(db, [h], existing, seeding=False)
+
+    row = db.execute(
+        "SELECT tg_message_ids FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row is not None
+    assert json.loads(row[0]) == sent_ids
+
+
+def test_process_houses_seeding_no_message_ids(db, monkeypatch):
+    monkeypatch.setattr(s, "notify_new_listing", lambda h: [])
+    h = _house(url="https://a.nl/1")
+    existing = s.get_existing_urls(db)
+    s.process_houses(db, [h], existing, seeding=True)
+
+    row = db.execute(
+        "SELECT tg_message_ids, status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == ""
+    assert row[1] == "available"
+
+
+# ---------------------------------------------------------------------------
+# Sold URL detection via _cycle_sold_urls
+# ---------------------------------------------------------------------------
+
+
+def test_json_feed_records_sold_urls(monkeypatch):
+    s._cycle_sold_urls.clear()
+    entries = [
+        _feed_entry(statusOrig="sold", url="/nl/aanbod/koop/delft/sold-flat/abc"),
+        _feed_entry(statusOrig="under_bid", url="/nl/aanbod/koop/delft/bid-flat/def"),
+        _feed_entry(statusOrig="available", url="/nl/aanbod/koop/delft/ok-flat/ghi"),
+    ]
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: json.dumps(entries).encode()
+    )
+    houses = s._scrape_realtime_listings_sales(
+        "https://feed", "https://vandaal.nl", "Van Daal"
+    )
+    assert len(houses) == 1
+    assert "https://vandaal.nl/nl/aanbod/koop/delft/sold-flat/abc" in s._cycle_sold_urls
+    assert "https://vandaal.nl/nl/aanbod/koop/delft/bid-flat/def" in s._cycle_sold_urls
+    assert (
+        "https://vandaal.nl/nl/aanbod/koop/delft/ok-flat/ghi"
+        not in s._cycle_sold_urls
+    )
+
+
+def test_realworks_records_verkocht_as_koop_url():
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+
+    html = """
+    <ul>
+      <li class="aanbodEntry">
+        <a class="aanbodEntryLink"
+           href="/aanbod/woningaanbod/verkocht/voorstraat-1/">x</a>
+        <h3 class="street-address">Voorstraat 1</h3>
+        <span class="locality">Delft</span>
+        <span class="kenmerkValue">€ 260.000 k.k.</span>
+      </li>
+    </ul>
+    """
+    page = _adaptor(html, "https://www.zomakelaars.nl/aanbod")
+    houses = s._scrape_realworks_koop(
+        page, "https://www.zomakelaars.nl", "ZO"
+    )
+    assert len(houses) == 0
+    expected = "https://www.zomakelaars.nl/aanbod/woningaanbod/koop/voorstraat-1/"
+    assert expected in s._cycle_sold_urls
+
+
+def test_olsthoorn_records_sold_urls():
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+
+    page = _adaptor(OLSTHOORN_GRID_HTML, "https://www.olsthoornmakelaars.nl/wonen/")
+    cards = page.css("a.card-house")
+    s._parse_olsthoorn_card(cards[1])  # Verkocht
+    s._parse_olsthoorn_card(cards[2])  # Onder bod
+
+    assert (
+        "https://www.olsthoornmakelaars.nl/wonen/object/achterstraat-9-delft/"
+        in s._cycle_sold_urls
+    )
+    assert (
+        "https://www.olsthoornmakelaars.nl/wonen/object/dorpsstraat-3-onder-bod/"
+        in s._cycle_sold_urls
+    )
+
+
+def test_debruynentak_records_verkocht_url(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+    monkeypatch.setattr(
+        s, "_http_get", lambda url, timeout=30: DEBRUYNENTAK_KOOP_HTML.encode()
+    )
+    s.scrape_debruynentak_sales(set())
+    assert (
+        "https://www.debruynentak.nl/achterstraat-9.html" in s._cycle_sold_urls
+    )
+
+
+# ---------------------------------------------------------------------------
+# _delete_listing_messages + process_sold_urls
+# ---------------------------------------------------------------------------
+
+
+def test_delete_listing_messages_marks_sold(db, monkeypatch):
+    msg_ids = [{"chat_id": "-100", "message_id": 42}]
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers",
+            json.dumps(msg_ids), "available",
+        ),
+    )
+    db.commit()
+
+    deleted_calls = []
+    monkeypatch.setattr(
+        s, "_delete_message",
+        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
+    )
+
+    result = s._delete_listing_messages(db, "https://a.nl/1")
+    assert result is True
+    assert deleted_calls == [("-100", 42)]
+
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == "sold"
+
+
+def test_delete_listing_messages_skips_already_sold(db, monkeypatch):
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers", "[]", "sold",
+        ),
+    )
+    db.commit()
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    assert s._delete_listing_messages(db, "https://a.nl/1") is False
+
+
+def test_delete_listing_messages_no_tg_ids_still_marks_sold(db, monkeypatch):
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers", "", "available",
+        ),
+    )
+    db.commit()
+
+    result = s._delete_listing_messages(db, "https://a.nl/1")
+    assert result is True
+
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == "sold"
+
+
+def test_process_sold_urls_deletes_matching_listings(db, monkeypatch):
+    msg_ids = [{"chat_id": "-100", "message_id": 55}]
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers",
+            json.dumps(msg_ids), "available",
+        ),
+    )
+    db.commit()
+
+    deleted_calls = []
+    monkeypatch.setattr(
+        s, "_delete_message",
+        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
+    )
+
+    count = s.process_sold_urls(
+        db, {"https://a.nl/1", "https://unknown.nl/2"}
+    )
+    assert count == 1
+    assert deleted_calls == [("-100", 55)]
+
+
+def test_process_sold_urls_ignores_unknown_urls(db, monkeypatch):
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    count = s.process_sold_urls(db, {"https://unknown.nl/1"})
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# recheck_available_listings (universal fallback)
+# ---------------------------------------------------------------------------
+
+
+def test_recheck_detects_sold_listing(db, monkeypatch):
+    msg_ids = [{"chat_id": "-100", "message_id": 77}]
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers",
+            json.dumps(msg_ids), "available",
+        ),
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        s, "_http_get",
+        lambda url, timeout=15: b"<html>Verkocht onder voorbehoud</html>",
+    )
+    deleted_calls = []
+    monkeypatch.setattr(
+        s, "_delete_message",
+        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
+    )
+
+    count = s.recheck_available_listings(db)
+    assert count == 1
+    assert deleted_calls == [("-100", 77)]
+
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == "sold"
+
+
+def test_recheck_keeps_available_listing(db, monkeypatch):
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers", "[]", "available",
+        ),
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        s, "_http_get",
+        lambda url, timeout=15: b"<html>Te koop Beschikbaar</html>",
+    )
+
+    count = s.recheck_available_listings(db)
+    assert count == 0
+
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == "available"
+
+
+def test_recheck_skips_on_fetch_failure(db, monkeypatch):
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers", "[]", "available",
+        ),
+    )
+    db.commit()
+
+    def failing_get(url, timeout=15):
+        raise Exception("network error")
+
+    monkeypatch.setattr(s, "_http_get", failing_get)
+    count = s.recheck_available_listings(db)
+    assert count == 0
+
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == "available"
+
+
+# ---------------------------------------------------------------------------
+# Prinsenstad / Frisia / Marloes sold detection via detail page re-parse
+# ---------------------------------------------------------------------------
+
+
+def test_prinsenstad_sold_records_url():
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+    body = _prinsenstad_detail("Verkocht", "Verkocht: Voorstraat 1, 2611 AB Delft")
+    url = "https://prinsenstadmakelaardij.nl/woningaanbod/koop/delft/voorstraat/1"
+    s._parse_prinsenstad_koop_listing(url, body)
+    assert url in s._cycle_sold_urls
+
+
+def test_frisia_sold_records_url():
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+    url = "https://frisiamakelaars.nl/wonen/aanbod/markt-3-delft-z"
+    s._parse_frisia_koop_listing(url, FRISIA_KOOP_SOLD_DETAIL.encode())
+    assert url in s._cycle_sold_urls
+
+
+def test_marloes_sold_records_url():
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+    url = "https://www.marloesmakelaars.nl/woning/markt-3-te-delft/"
+    s._parse_marloes_koop_listing(url, MARLOES_SOLD_DETAIL.encode())
+    assert url in s._cycle_sold_urls

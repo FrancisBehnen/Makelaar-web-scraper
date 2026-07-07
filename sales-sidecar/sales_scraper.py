@@ -53,6 +53,7 @@ class _SuppressBenignCF(logging.Filter):
 logging.getLogger("scrapling").addFilter(_SuppressBenignCF())
 
 DB_PATH = os.environ.get("SALES_DB_PATH", "data/sales.sqlite")
+RECHECK_BATCH_SIZE = int(os.environ.get("RECHECK_BATCH_SIZE", "5"))
 # Dropped on the data volume just before a self-restart exit; its presence on
 # the next boot means the previous process self-restarted.
 SELF_RESTART_MARKER = Path(DB_PATH).parent / ".self_restart_sales"
@@ -307,9 +308,16 @@ def init_db():
             plaats TEXT,
             vraagprijs TEXT,
             oppervlakte TEXT,
-            kamers TEXT
+            kamers TEXT,
+            tg_message_ids TEXT DEFAULT '',
+            status TEXT DEFAULT 'available'
         )
         """)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
+    if "tg_message_ids" not in cols:
+        conn.execute("ALTER TABLE sales ADD COLUMN tg_message_ids TEXT DEFAULT ''")
+    if "status" not in cols:
+        conn.execute("ALTER TABLE sales ADD COLUMN status TEXT DEFAULT 'available'")
     conn.commit()
     return conn
 
@@ -378,12 +386,14 @@ def escape_html(text: str) -> str:
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _send(chat_ids_raw: str, text: str) -> None:
+def _send(chat_ids_raw: str, text: str) -> list[dict]:
+    """Send a Telegram message and return [{"chat_id": ..., "message_id": ...}, ...]."""
+    sent: list[dict] = []
     if not TELEGRAM_BOT_TOKEN:
-        return
+        return sent
     chat_ids = [c.strip() for c in (chat_ids_raw or "").split(",") if c.strip()]
     if not chat_ids:
-        return
+        return sent
     api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for chat_id in chat_ids:
         body = json.dumps(
@@ -398,9 +408,18 @@ def _send(chat_ids_raw: str, text: str) -> None:
             api_url, data=body, headers={"Content-Type": "application/json"}
         )
         try:
-            urllib.request.urlopen(req, timeout=10)
+            resp_body = urllib.request.urlopen(req, timeout=10).read()
+            resp = json.loads(resp_body)
+            if resp.get("ok") and "result" in resp:
+                sent.append(
+                    {
+                        "chat_id": chat_id,
+                        "message_id": resp["result"]["message_id"],
+                    }
+                )
         except Exception as exc:
             log.error("Telegram send to %s failed: %s", chat_id, exc)
+    return sent
 
 
 def _listing_text(h: dict[str, str]) -> str:
@@ -417,8 +436,8 @@ def _listing_text(h: dict[str, str]) -> str:
     )
 
 
-def notify_new_listing(h: dict[str, str]) -> None:
-    _send(TELEGRAM_SALES_CHAT_IDS, _listing_text(h))
+def notify_new_listing(h: dict[str, str]) -> list[dict]:
+    return _send(TELEGRAM_SALES_CHAT_IDS, _listing_text(h))
 
 
 def send_telegram_alert(message: str) -> None:
@@ -438,6 +457,100 @@ def send_throttled_timeout_alert(key: str, message: str) -> None:
         return
     _last_timeout_alert[key] = now
     send_telegram_alert(message)
+
+
+# ---------------------------------------------------------------------------
+# Telegram message deletion (sold listings)
+# ---------------------------------------------------------------------------
+
+_cycle_sold_urls: set[str] = set()
+
+
+def _record_sold_url(url: str) -> None:
+    if url:
+        _cycle_sold_urls.add(url)
+
+
+def _delete_message(chat_id: str, message_id: int) -> bool:
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteMessage"
+    body = json.dumps({"chat_id": chat_id, "message_id": message_id}).encode()
+    req = urllib.request.Request(
+        api_url, data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        resp_body = urllib.request.urlopen(req, timeout=10).read()
+        resp = json.loads(resp_body)
+        return resp.get("ok", False)
+    except Exception as exc:
+        log.warning("Telegram delete %s/%s failed: %s", chat_id, message_id, exc)
+        return False
+
+
+def _delete_listing_messages(conn, url: str) -> bool:
+    """Delete Telegram messages for a listing and mark it as sold.
+
+    Returns True if the listing was transitioned from available to sold.
+    """
+    row = conn.execute(
+        "SELECT tg_message_ids, status FROM sales WHERE url = ?", (url,)
+    ).fetchone()
+    if row is None:
+        return False
+    tg_ids_raw, current_status = row
+    if current_status != "available":
+        return False
+
+    if tg_ids_raw:
+        for entry in json.loads(tg_ids_raw):
+            _delete_message(str(entry["chat_id"]), entry["message_id"])
+
+    conn.execute("UPDATE sales SET status = 'sold' WHERE url = ?", (url,))
+    conn.commit()
+
+    addr_row = conn.execute(
+        "SELECT straatnaamHuisnummer FROM sales WHERE url = ?", (url,)
+    ).fetchone()
+    addr = addr_row[0] if addr_row else url
+    log.info("Marked sold and deleted TG message(s): %s (%s)", addr, url)
+    return True
+
+
+def process_sold_urls(conn, sold_urls: set[str]) -> int:
+    """Check sold URLs against DB and delete Telegram messages for matches."""
+    deleted = 0
+    for url in sold_urls:
+        if _delete_listing_messages(conn, url):
+            deleted += 1
+    return deleted
+
+
+def recheck_available_listings(conn) -> int:
+    """Re-fetch a batch of available listings via plain HTTP and check status.
+
+    Universal fallback for sources where sold detection doesn't happen
+    during the normal scrape (sitemap detail pages, Funda, etc.).
+    """
+    rows = conn.execute(
+        "SELECT url FROM sales WHERE status = 'available' "
+        "ORDER BY rowid ASC LIMIT ?",
+        (RECHECK_BATCH_SIZE,),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    deleted = 0
+    for (url,) in rows:
+        try:
+            body = _http_get(url, timeout=15)
+        except Exception:
+            continue
+        text = body.decode("utf-8", errors="ignore")
+        if _SOLD_STATUS_RE.search(text):
+            if _delete_listing_messages(conn, url):
+                deleted += 1
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +734,10 @@ def _scrape_realworks_koop(page, base_url: str, site_name: str) -> list[dict[str
                 continue
             url = make_absolute(href, base_url)
 
-            if "/huur/" in url or "/verkocht/" in url:
+            if "/huur/" in url:
+                continue
+            if "/verkocht/" in url:
+                _record_sold_url(url.replace("/verkocht/", "/koop/"))
                 continue
 
             address = _first_text(listing, "h3.street-address")
@@ -729,9 +845,9 @@ def _scrape_realtime_listings_sales(
             continue
         if not entry.get("isSales"):
             continue
-        # Only currently-available listings; drops sold / is_bought /
-        # under_bid / sold_ur, matching the Bun processor's statusOrig gate.
         if entry.get("statusOrig") != "available":
+            sold_url = make_absolute(entry.get("url", ""), base_url)
+            _record_sold_url(sold_url)
             continue
 
         sales_price = entry.get("salesPrice") or 0
@@ -840,14 +956,15 @@ def _parse_prinsenstad_koop_listing(url: str, body: bytes) -> dict[str, str] | N
     if not price:
         return None
 
-    # Skip sold / under-offer listings — the sale sitemap keeps them around.
     status = fields.get("status", "")
     if _SOLD_STATUS_RE.search(status):
+        _record_sold_url(url)
         return None
 
     h1_els = a.css("h1")
     h1 = (h1_els[0].get_all_text() or "").strip() if h1_els else ""
     if _SOLD_STATUS_RE.search(h1):
+        _record_sold_url(url)
         return None
     header = re.sub(
         r"^(Te huur|Te koop|Verhuurd|Verkocht|Onder bod|Nieuw in verkoop)" r"\s*:\s*",
@@ -912,6 +1029,17 @@ def scrape_prinsenstad_sales(existing_urls: set[str]) -> list[dict[str, str]]:
         len(new_candidates),
     )
 
+    existing_candidates = [u for u in candidates if u in existing_urls]
+    for url in existing_candidates[:RECHECK_BATCH_SIZE]:
+        try:
+            body = _http_get(url)
+        except Exception:
+            continue
+        try:
+            _parse_prinsenstad_koop_listing(url, body)
+        except Exception:
+            continue
+
     houses: list[dict[str, str]] = []
     for url in new_candidates:
         try:
@@ -948,6 +1076,7 @@ def _parse_olsthoorn_card(card) -> dict[str, str] | None:
 
     status = _first_text(card, ".card-house__status .card-house__label")
     if _SOLD_STATUS_RE.search(status):
+        _record_sold_url(url)
         return None
 
     city = _first_text(card, "h2.card__title")
@@ -1144,10 +1273,6 @@ def scrape_debruynentak_sales(existing_urls: set[str]) -> list[dict[str, str]]:
 
     for item in items:
         try:
-            label = _first_text(item, "div.label")
-            if _SOLD_STATUS_RE.search(label):
-                continue
-
             link_el = item.css("a.itemTitel")
             if not link_el:
                 continue
@@ -1155,6 +1280,11 @@ def scrape_debruynentak_sales(existing_urls: set[str]) -> list[dict[str, str]]:
             if not href:
                 continue
             url = make_absolute(href, "https://www.debruynentak.nl")
+
+            label = _first_text(item, "div.label")
+            if _SOLD_STATUS_RE.search(label):
+                _record_sold_url(url)
+                continue
 
             address = _first_text(item, "span.objectTitel")
             if not address:
@@ -1312,6 +1442,7 @@ def _parse_frisia_koop_listing(url: str, body: bytes) -> dict[str, str] | None:
     if status_block is not None:
         status_text = status_block.get_all_text(separator=" ", strip=True)
         if _SOLD_STATUS_RE.search(status_text):
+            _record_sold_url(url)
             return None
 
     h1 = a.css("h1")
@@ -1415,6 +1546,17 @@ def scrape_frisia_sales(existing_urls: set[str]) -> list[dict[str, str]]:
         len(new_candidates),
     )
 
+    existing_candidates = [u for u in candidates if u in existing_urls]
+    for url in existing_candidates[:RECHECK_BATCH_SIZE]:
+        try:
+            body = _http_get(url)
+        except Exception:
+            continue
+        try:
+            _parse_frisia_koop_listing(url, body)
+        except Exception:
+            continue
+
     if len(new_candidates) > FRISIA_MAX_FETCHES_PER_CYCLE:
         log.info(
             "Frisia koop: capping detail fetches at %d this cycle",
@@ -1470,6 +1612,7 @@ def _parse_marloes_koop_listing(url: str, body: bytes) -> dict[str, str] | None:
 
     status = fields.get("status", "")
     if _SOLD_STATUS_RE.search(status):
+        _record_sold_url(url)
         return None
 
     city = fields.get("plaats", "")
@@ -1527,6 +1670,17 @@ def scrape_marloes_sales(existing_urls: set[str]) -> list[dict[str, str]]:
         len(new_candidates),
     )
 
+    existing_candidates = [u for u in candidates if u in existing_urls]
+    for url in existing_candidates[:RECHECK_BATCH_SIZE]:
+        try:
+            body = _http_get(url)
+        except Exception:
+            continue
+        try:
+            _parse_marloes_koop_listing(url, body)
+        except Exception:
+            continue
+
     houses: list[dict[str, str]] = []
     for url in new_candidates:
         try:
@@ -1578,6 +1732,17 @@ def scrape_psgwonen_sales(existing_urls: set[str]) -> list[dict[str, str]]:
         len(candidates),
         len(new_candidates),
     )
+
+    existing_candidates = [u for u in candidates if u in existing_urls]
+    for url in existing_candidates[:RECHECK_BATCH_SIZE]:
+        try:
+            body = _http_get(url)
+        except Exception:
+            continue
+        try:
+            _parse_prinsenstad_koop_listing(url, body)
+        except Exception:
+            continue
 
     houses: list[dict[str, str]] = []
     for url in new_candidates:
@@ -1794,7 +1959,13 @@ def process_houses(
                 duplicate,
             )
             continue
-        notify_new_listing(h)
+        msg_ids = notify_new_listing(h)
+        if msg_ids:
+            conn.execute(
+                "UPDATE sales SET tg_message_ids = ? WHERE url = ?",
+                (json.dumps(msg_ids), h["url"]),
+            )
+            conn.commit()
         notified += 1
     return notified
 
@@ -1806,6 +1977,7 @@ def run_cycle():
     if seeding:
         log.info("Sales table empty — seeding without notifications")
 
+    _cycle_sold_urls.clear()
     counts: dict[str, int] = {}
     notified_total = 0
 
@@ -1861,6 +2033,17 @@ def run_cycle():
             notified_total += process_houses(conn, matched, existing_urls, seeding)
         except Exception as exc:
             log.error("%s scrape failed: %s", name, exc, exc_info=True)
+
+    sold_deleted = process_sold_urls(conn, _cycle_sold_urls)
+    if sold_deleted:
+        log.info("Deleted %d sold listing message(s) from Telegram", sold_deleted)
+
+    recheck_deleted = recheck_available_listings(conn)
+    if recheck_deleted:
+        log.info(
+            "Recheck: deleted %d sold listing message(s) from Telegram",
+            recheck_deleted,
+        )
 
     conn.close()
     return notified_total, counts
