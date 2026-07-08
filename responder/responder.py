@@ -134,10 +134,20 @@ def _refresh_notification(
 # ---------------------------------------------------------------------------
 
 
+_AGGREGATOR_DOMAINS = {"huurstunt.nl"}
+
+
 def _notify_duplicate(house, prior) -> None:
     adres = house["straatnaamHuisnummer"]
     new_domain = urlparse(house["url"]).netloc.replace("www.", "")
     prior_domain = urlparse(prior["url"]).netloc.replace("www.", "")
+    db.create_response(house["url"], "duplicate")
+    if new_domain in _AGGREGATOR_DOMAINS or prior_domain in _AGGREGATOR_DOMAINS:
+        log.info(
+            "Silent duplicate %s (%s) — already seen via %s (aggregator involved)",
+            adres, new_domain, prior_domain,
+        )
+        return
     text = (
         f"🔁 <b>{esc(adres)}</b> staat nu ook op <code>{esc(new_domain)}</code> "
         f"— al eerder gezien via {esc(prior_domain)}.\n"
@@ -149,7 +159,6 @@ def _notify_duplicate(house, prior) -> None:
             tg.send_message(chat_id, text, reply_to=message_id)
     else:
         tg.broadcast(text)
-    db.create_response(house["url"], "duplicate")
     log.info(
         "Duplicate listing %s (%s) — already seen via %s (response %d)",
         adres, new_domain, prior_domain, prior["id"],
