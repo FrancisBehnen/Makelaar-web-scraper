@@ -10,6 +10,7 @@ so no scrapling/camoufox stubbing is needed here.
 """
 
 import json
+import re
 import sqlite3
 import threading
 import urllib.error
@@ -439,7 +440,29 @@ def test_send_gone_summary_singular(rdb, monkeypatch):
     assert "1 woningen" not in sent[0]
 
 
-def test_send_gone_summary_deletes_previous(rdb, monkeypatch):
+def test_send_gone_summary_append_only_keeps_previous(rdb, monkeypatch):
+    # Default append-only mode: the previous summary is NOT deleted, and the new
+    # one carries a date-time stamp so the history stays distinguishable.
+    monkeypatch.setattr(config, "SUMMARY_APPEND_ONLY", True)
+    db.kv_set("gone_summary_ids", json.dumps({"-100": 150}))
+    deleted = []
+    sent = []
+    monkeypatch.setattr(
+        tg, "delete_message",
+        lambda cid, mid: (deleted.append((cid, mid)), True)[1],
+    )
+    monkeypatch.setattr(
+        tg, "broadcast", lambda text, **kw: (sent.append(text), {"-100": 201})[1]
+    )
+
+    delisting.send_gone_summary([("Markt 3", "https://a.nl/3")])
+    assert deleted == []
+    assert re.search(r"\(\d{2}-\d{2} \d{2}:\d{2}\)", sent[0])
+    assert json.loads(db.kv_get("gone_summary_ids")) == {"-100": 201}
+
+
+def test_send_gone_summary_replace_mode_deletes_previous(rdb, monkeypatch):
+    monkeypatch.setattr(config, "SUMMARY_APPEND_ONLY", False)
     db.kv_set("gone_summary_ids", json.dumps({"-100": 150}))
     deleted = []
     monkeypatch.setattr(

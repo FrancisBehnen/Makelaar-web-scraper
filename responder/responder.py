@@ -18,6 +18,7 @@ import queue
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import config
@@ -37,6 +38,12 @@ logging.basicConfig(
 log = logging.getLogger("responder")
 
 URL_RE = re.compile(r'https?://[^\s<>"]+')
+
+# A message counts as a bare-URL add-site submission when the text is just the
+# URL plus at most this many characters of surrounding text (a short prefix
+# and/or trailing punctuation). More surrounding text means it's prose that
+# merely mentions a link (an issue report) and is chat-logged instead.
+_MAX_ADD_SITE_SURROUNDING = 15
 
 STATUS_EMOJI = {
     "detecting": "🔍",
@@ -281,6 +288,41 @@ def _propose_add_site(chat_id: str, url: str, *, sales: bool = False) -> None:
     )
 
 
+def _log_chat_message(message: dict) -> None:
+    """Persist a free-text group message for the daily maintenance agent.
+
+    Only reached for messages not consumed by any other flow (commands,
+    listing-URL submissions). Bot messages are skipped. Wrapped defensively so a
+    logging failure never breaks the update loop.
+    """
+    sender = message.get("from") or {}
+    if sender.get("is_bot"):
+        return
+    text = (message.get("text") or "").strip()
+    if not text:
+        return
+    name = " ".join(
+        p for p in (sender.get("first_name"), sender.get("last_name")) if p
+    )
+    ts_epoch = message.get("date")
+    ts = (
+        datetime.fromtimestamp(ts_epoch, tz=timezone.utc).isoformat()
+        if ts_epoch
+        else datetime.now(timezone.utc).isoformat()
+    )
+    try:
+        db.log_chat_message(
+            chat_id=str(message.get("chat", {}).get("id", "")),
+            message_id=message.get("message_id"),
+            sender_name=name,
+            sender_username=sender.get("username") or "",
+            ts=ts,
+            text=text,
+        )
+    except Exception:
+        log.exception("Failed to log chat message")
+
+
 def _handle_message(message: dict) -> None:
     chat_id = str(message.get("chat", {}).get("id", ""))
     is_rentals = chat_id in config.TELEGRAM_CHAT_IDS
@@ -300,8 +342,17 @@ def _handle_message(message: dict) -> None:
         _send_status(chat_id)
         return
     match = URL_RE.search(text)
-    if match:
+    if match and len(text) - len(match.group(0)) <= _MAX_ADD_SITE_SURROUNDING:
+        # Bare-URL submission: the message is essentially just the listing link
+        # (the URL plus at most _MAX_ADD_SITE_SURROUNDING characters of trivial
+        # surrounding text, e.g. a short "check "/"kijk " prefix or trailing
+        # punctuation). Longer prose that merely *mentions* a link (an issue
+        # report like "de knop bij <url> werkt niet") falls through to logging.
         _propose_add_site(chat_id, match.group(0).rstrip(".,)"), sales=sales)
+        return
+    # Not a command or bare-URL submission: an issue report / free-text
+    # message. Log it for the daily end-of-day maintenance agent to pick up.
+    _log_chat_message(message)
 
 
 # Status buttons: code -> (reaction emoji, text-fallback prefix emoji, label).
@@ -596,6 +647,12 @@ def worker_loop() -> None:
 def main() -> None:
     os.makedirs(config.SCREENSHOT_DIR, exist_ok=True)
     db.init_schema()
+    try:
+        purged = db.purge_old_chat_log()
+        if purged:
+            log.info("Purged %d chat_log row(s) older than 14 days", purged)
+    except Exception:
+        log.exception("chat_log purge failed")
     log.info(
         "Responder starting (%d notification chat(s) configured)",
         len(config.TELEGRAM_CHAT_IDS),

@@ -48,6 +48,19 @@ def init_schema() -> None:
         """
     )
     c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT NOT NULL,
+            message_id INTEGER,
+            sender_name TEXT,
+            sender_username TEXT,
+            ts TEXT NOT NULL,
+            text TEXT NOT NULL
+        )
+        """
+    )
     _migrate_responses(c)
     c.commit()
 
@@ -66,6 +79,51 @@ def _migrate_responses(c: sqlite3.Connection) -> None:
         )
     if "last_checked_at" not in cols:
         c.execute("ALTER TABLE responses ADD COLUMN last_checked_at TEXT")
+
+
+# ---------------------------------------------------------------------------
+# chat_log — free-text group messages captured for the daily maintenance agent
+# ---------------------------------------------------------------------------
+
+
+def log_chat_message(
+    *,
+    chat_id: str,
+    message_id: int | None,
+    sender_name: str,
+    sender_username: str,
+    ts: str,
+    text: str,
+) -> None:
+    """Append one group chat message (issue report / free text) to ``chat_log``.
+
+    Called from the update loop for messages not consumed by any other flow; the
+    caller wraps this defensively so a write failure never breaks polling.
+    """
+    c = conn()
+    c.execute(
+        "INSERT INTO chat_log "
+        "(chat_id, message_id, sender_name, sender_username, ts, text) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (chat_id, message_id, sender_name, sender_username, ts, text),
+    )
+    c.commit()
+
+
+def purge_old_chat_log(days: int = 14) -> int:
+    """Delete chat_log rows older than ``days`` (keeps the table lean).
+
+    ``ts`` is stored as an ISO-8601 string; ``datetime(ts)`` normalises it (incl.
+    the ``T`` separator and timezone offset) so it compares against SQLite's UTC
+    ``datetime('now')``. Returns the number of rows removed.
+    """
+    c = conn()
+    cur = c.execute(
+        "DELETE FROM chat_log WHERE datetime(ts) < datetime('now', ?)",
+        (f"-{int(days)} days",),
+    )
+    c.commit()
+    return cur.rowcount
 
 
 def kv_get(key: str) -> str | None:

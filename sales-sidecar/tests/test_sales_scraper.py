@@ -1,6 +1,7 @@
 """Tests for the Delft koop sales scraper."""
 
 import json
+import re
 import sqlite3
 
 import pytest
@@ -1712,7 +1713,34 @@ def test_send_sold_summary_sends_and_stores_ids(monkeypatch):
     assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 200}]
 
 
-def test_send_sold_summary_deletes_previous(monkeypatch):
+def test_send_sold_summary_append_only_keeps_previous(monkeypatch):
+    # Default append-only mode: the previous summary is NOT deleted, and the new
+    # one carries a date-time stamp so the history stays distinguishable.
+    monkeypatch.setattr(s, "SUMMARY_APPEND_ONLY", True)
+    s._last_sold_summary_ids = [{"chat_id": "-100", "message_id": 150}]
+    deleted_calls = []
+    sent_texts = []
+    monkeypatch.setattr(
+        s, "_delete_message",
+        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
+    )
+    monkeypatch.setattr(
+        s, "_send",
+        lambda chat_ids, text: (
+            sent_texts.append(text),
+            [{"chat_id": "-100", "message_id": 201}],
+        )[1],
+    )
+
+    s._send_sold_summary([("Markt 3", "https://a.nl/3")])
+
+    assert deleted_calls == []
+    assert re.search(r"\(\d{2}-\d{2} \d{2}:\d{2}\)", sent_texts[0])
+    assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 201}]
+
+
+def test_send_sold_summary_replace_mode_deletes_previous(monkeypatch):
+    monkeypatch.setattr(s, "SUMMARY_APPEND_ONLY", False)
     s._last_sold_summary_ids = [{"chat_id": "-100", "message_id": 150}]
     deleted_calls = []
     monkeypatch.setattr(

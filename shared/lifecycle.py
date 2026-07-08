@@ -21,14 +21,35 @@ parameters:
   batch of the least-recently-checked available listings; each item's check
   cursor is advanced *before* the fetch, so a persistently failing URL never
   blocks the front of the queue.
-* :func:`send_replaceable_summary` — build + send one summary, deleting the
-  previous one first.
+* :func:`send_replaceable_summary` — build + send one summary. In *replace*
+  mode it deletes the previous summary first; in *append-only* mode it leaves
+  the previous summary in place (a visible history) and stamps each entry with
+  a date-time so the history stays distinguishable.
 """
 
 import re
 import urllib.error
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# Format for the date-time stamp appended to append-only summary titles.
+SUMMARY_TIMESTAMP_FORMAT = "%d-%m %H:%M"
+
+# Summaries stamp local Dutch wall-clock time, not the container's UTC clock.
+_SUMMARY_TZ_NAME = "Europe/Amsterdam"
+
+
+def _summary_now() -> datetime:
+    """Current time in Europe/Amsterdam, falling back to UTC if the tz database
+    is unavailable (e.g. a slim image without the ``tzdata`` package). The full
+    ``python:3.12-bookworm`` images this ships in include system tzdata, so the
+    fallback only guards degraded/test environments."""
+    try:
+        return datetime.now(ZoneInfo(_SUMMARY_TZ_NAME))
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc)
 
 # HTTP statuses that mean the listing page is gone for good.
 DEFAULT_GONE_HTTP_CODES = frozenset({404, 410})
@@ -151,6 +172,7 @@ def build_summary_text(
     *,
     title_template: str,
     escape: Callable[[str], str],
+    timestamp: str | None = None,
 ) -> str:
     """Build the batched summary body.
 
@@ -161,6 +183,8 @@ def build_summary_text(
 
     ``title_template`` is formatted with ``count`` and ``word`` (correctly
     pluralised) and should already contain the leading emoji and ``<b>…</b>``.
+    When ``timestamp`` is given it is appended to the title line (outside the
+    bold) so successive entries in an append-only history stay distinguishable.
     """
     count = len(listings)
     word = "woning" if count == 1 else "woningen"
@@ -169,6 +193,8 @@ def build_summary_text(
         for address, url in listings
     )
     title = title_template.format(count=count, word=word)
+    if timestamp:
+        title = f"{title} ({timestamp})"
     return f"{title}\n\n{listing_lines}"
 
 
@@ -179,17 +205,34 @@ def send_replaceable_summary(
     escape: Callable[[str], str],
     delete_previous: Callable[[], None],
     broadcast: Callable[[str], Any],
+    append_only: bool = False,
+    timestamp: str | None = None,
 ) -> Any:
-    """Delete the previous summary, send a fresh one, return the new send result.
+    """Send one batched summary and return the new send result.
+
+    In *replace* mode (``append_only=False``) the previous summary is deleted
+    first via ``delete_previous`` so the chat only shows the latest batch. In
+    *append-only* mode the delete is skipped — every batch leaves its own
+    message behind (a visible history) and the title is stamped with a
+    date-time so entries stay distinguishable. Flipping between the two is a
+    one-line change at the call site; the previous-id persistence plumbing is
+    kept intact in both modes.
 
     ``listings`` is a list of ``(address, url)`` pairs (see
     :func:`build_summary_text`). The caller owns summary-id persistence (kv row
     vs in-memory), passing a ``delete_previous`` that removes the last summary
     and a ``broadcast`` that sends the new text and returns whatever id
-    structure it stores.
+    structure it stores. ``timestamp`` may be supplied explicitly (tests); in
+    append-only mode it defaults to the current local time.
     """
-    delete_previous()
+    if not append_only:
+        delete_previous()
+    if append_only and timestamp is None:
+        timestamp = _summary_now().strftime(SUMMARY_TIMESTAMP_FORMAT)
     text = build_summary_text(
-        listings, title_template=title_template, escape=escape
+        listings,
+        title_template=title_template,
+        escape=escape,
+        timestamp=timestamp,
     )
     return broadcast(text)

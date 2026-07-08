@@ -166,10 +166,14 @@ def recheck_delisted() -> list[tuple[str, str]]:
 
 
 def send_gone_summary(listings: list[tuple[str, str]]) -> None:
-    """Send one summary of removed listings, replacing the previous summary.
+    """Send one summary of removed listings.
 
     ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
     address to its listing URL.
+
+    Append-only by default (each batch leaves a timestamped message behind);
+    in replace-mode it deletes the previous summary first. See
+    ``config.SUMMARY_APPEND_ONLY``.
     """
     prev = db.kv_get(_GONE_SUMMARY_KV)
 
@@ -184,5 +188,6 @@ def send_gone_summary(listings: list[tuple[str, str]]) -> None:
         escape=esc,
         delete_previous=delete_previous,
         broadcast=lambda text: tg.broadcast(text),
+        append_only=config.SUMMARY_APPEND_ONLY,
     )
     db.kv_set(_GONE_SUMMARY_KV, json.dumps(message_ids))

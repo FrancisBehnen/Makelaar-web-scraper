@@ -24,6 +24,7 @@ on:
           - scraper-db-stats
           - scraper-last-new
           - responder-detection-stats
+          - telegram-chat-log
           - debug-huurstunt-locked
           - debug-huurstunt-login
           - debug-huurstunt-cookie
@@ -397,6 +398,27 @@ jobs:
                     print("no", modname)
             for key in ("cookies", "extra_headers", "additional_args"):
                 print("DOC mentions", key, ":", key in (StealthyFetcher.fetch.__doc__ or ""))
+            PYEOF
+                ;;
+
+              telegram-chat-log)
+                sudo docker exec -i scraper-responder python3 << 'PYEOF'
+            import sqlite3, os, sys
+            db = os.environ.get("DB_PATH", "data/db.sqlite")
+            if not os.path.isfile(db):
+                print("Database not found at " + db); sys.exit(1)
+            c = sqlite3.connect(db)
+            has = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_log'").fetchone()
+            if not has:
+                print("chat_log table does not exist yet"); sys.exit(0)
+            rows = c.execute(
+                "SELECT ts, chat_id, COALESCE(NULLIF(sender_name,''), NULLIF(sender_username,''), '?') AS who, text "
+                "FROM chat_log WHERE datetime(ts) >= datetime('now', '-24 hours') ORDER BY ts"
+            ).fetchall()
+            print("=== Telegram chat_log — last 24h (%d message(s)) ===" % len(rows))
+            for ts, chat_id, who, text in rows:
+                print("[%s] (%s) %s: %s" % (ts, chat_id, who, (text or "").replace(chr(10), " ")))
+            c.close()
             PYEOF
                 ;;
 
