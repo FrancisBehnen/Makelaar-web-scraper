@@ -570,11 +570,46 @@ _SOLD_BADGE_STATUS_RE = re.compile(
 )
 
 
+_STEALTHY_RECHECK_DOMAINS = ("funda.nl", "pararius.nl")
+
+
+def _needs_stealthy_recheck(url: str) -> bool:
+    return any(d in url for d in _STEALTHY_RECHECK_DOMAINS)
+
+
+def _stealthy_fetch(url: str) -> bytes:
+    """Fetch a single page via StealthyFetcher (headless browser).
+
+    Bypasses the consecutive-failure counter used by the scrape cycle so a
+    recheck timeout doesn't trigger a self-restart. Raises HTTPError on
+    404/410 so ``lifecycle.is_gone`` treats them as gone.
+    """
+    from scrapling.fetchers import StealthyFetcher
+
+    future = _fetch_pool.submit(
+        StealthyFetcher.fetch,
+        url,
+        headless=True,
+        solve_cloudflare=True,
+        network_idle=True,
+    )
+    page = future.result(timeout=FETCH_TIMEOUT)
+    status = getattr(page, "status", 200)
+    if status in (404, 410):
+        raise urllib.error.HTTPError(url, status, "Gone", {}, None)
+    return page.body
+
+
 def _is_sold(url: str) -> bool:
     """Page-scoped sold check for one listing URL (404/410 also counts)."""
+    fetch = (
+        _stealthy_fetch
+        if _needs_stealthy_recheck(url)
+        else lambda u: _http_get(u, timeout=15)
+    )
     return lifecycle.is_gone(
         url,
-        fetch=lambda u: _http_get(u, timeout=15),
+        fetch=fetch,
         page_status_re=_SOLD_PAGE_STATUS_RE,
         badge_status_re=_SOLD_BADGE_STATUS_RE,
     )
