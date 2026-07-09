@@ -370,15 +370,15 @@ def save_house(conn, h: dict[str, str]) -> None:
 
 
 def _norm_addr(text: str) -> str:
-    return (text or "").lower().replace(" ", "")
+    return (text or "").lower().replace(" ", "").replace("-", "").replace(".", "")
 
 
 def find_duplicate(conn, h: dict[str, str]) -> str | None:
     """URL of an existing listing at the same address+city, else None.
 
     Mirrors the responder's find_prior_response: addresses are normalised by
-    stripping spaces and lowercasing; cities match on substring containment so
-    "2624 NM Delft" and "Delft" are considered equal.
+    stripping spaces, hyphens, dots, and lowercasing; cities match on substring
+    containment so "2624 NM Delft" and "Delft" are considered equal.
     """
     target_addr = _norm_addr(h.get("straatnaamHuisnummer", ""))
     target_city = (h.get("plaats", "") or "").lower()
