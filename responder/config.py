@@ -54,17 +54,6 @@ FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
 RECHECK_INTERVAL = int(os.environ.get("RENTAL_RECHECK_INTERVAL", "600"))
 RECHECK_BATCH_SIZE = int(os.environ.get("RENTAL_RECHECK_BATCH_SIZE", "5"))
 
-# Deletion-summary mode. The auto-deletion mechanism is freshly deployed and not
-# yet user-verified, so summaries are append-only (each batch leaves its own
-# timestamped message behind, building a visible history) by default. Set
-# SUMMARY_APPEND_ONLY=0 to resume replace-mode (only the latest batch shown).
-SUMMARY_APPEND_ONLY = os.environ.get("SUMMARY_APPEND_ONLY", "1").lower() not in (
-    "0",
-    "false",
-    "no",
-    "",
-)
-
 # Only one Camoufox instance may run at a time (VPS memory). Both contact
 # detection (StealthyFetcher) and the form-fill jobs take this lock around
 # any browser use.

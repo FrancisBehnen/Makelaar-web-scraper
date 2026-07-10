@@ -30,7 +30,7 @@ parameters:
 import re
 import urllib.error
 from collections.abc import Callable, Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -261,3 +261,123 @@ def send_replaceable_summary(
         timestamp=timestamp,
     )
     return broadcast(text)
+
+
+def dedup_by_url(entries: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Deduplicate ``(address, url)`` pairs by URL, preserving first-seen order.
+
+    Used to merge a cycle's freshly-removed listings into the accumulating
+    summary without ever listing the same URL twice (the same listing can be
+    re-detected as gone across cycles, or arrive from two code paths).
+    """
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for address, url in entries:
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append((address, url))
+    return out
+
+
+def upsert_accumulating_summary(
+    new_entries: Iterable[tuple[str, str]],
+    *,
+    load_state: Callable[[], dict | None],
+    save_state: Callable[[dict], None],
+    edit: Callable[[list[dict], str], bool],
+    send: Callable[[str], list[dict]],
+    build_text: Callable[[list[tuple[str, str]]], str],
+    delete: Callable[[list[dict]], Any] | None = None,
+    now: Callable[[], datetime] = _summary_now,
+    max_entries: int = 40,
+    max_chars: int = 3800,
+    roll_after_hours: int = 47,
+) -> dict:
+    """Maintain ONE persistent, in-place-edited summary that accumulates entries.
+
+    The old ``send_replaceable_summary`` sent (or replaced) a whole message every
+    cycle, which pushes a Telegram notification each time. That is wrong for a
+    *summary* — pushes should be reserved for genuinely new listings. This
+    function instead keeps a single message per local day and **edits it in
+    place** (``editMessageText`` is silent) as more listings go gone/sold, so the
+    summary quietly grows without ever pinging the group again.
+
+    State (a JSON-serialisable dict the caller persists) has the shape::
+
+        {"message_ids": [{"chat_id": .., "message_id": ..}, ...],
+         "entries": [[address, url], ...],
+         "created_at": ISO-8601, "day": "YYYY-MM-DD"}
+
+    All IO is injected so the logic is unit-testable and backend-agnostic:
+
+    * ``load_state()`` / ``save_state(state)`` — persist the blob (kv row).
+    * ``edit(message_ids, text) -> bool`` — edit the live message(s); returns
+      False when it can't (message deleted, or past Telegram's edit window).
+    * ``send(text) -> list[dict]`` — send a NEW message and return its ids. The
+      caller MUST make this send silent (``disable_notification=True``) so even
+      the day's first summary doesn't push.
+    * ``delete(message_ids)`` — optional; used only to clear a stale message that
+      can no longer be edited before sending its replacement.
+    * ``build_text(entries) -> str`` — render the body (reuse
+      :func:`build_summary_text`).
+    * ``now()`` — current local time (defaults to Europe/Amsterdam).
+
+    A **fresh** message is started (the old one left in place as history) when
+    the local day changes, the current summary is older than ``roll_after_hours``
+    (bounds message age/size and stays inside Telegram's edit window), or the
+    accumulated list would exceed ``max_entries`` / ``max_chars``. On a roll the
+    entry list resets to just ``new_entries``.
+    """
+    state = load_state() or {}
+    prev_entries = [tuple(e) for e in state.get("entries", [])]
+    message_ids: list[dict] = state.get("message_ids") or []
+    created_at_raw = state.get("created_at")
+    state_day = state.get("day")
+
+    now_dt = now()
+    today = now_dt.date().isoformat()
+    merged = dedup_by_url([*prev_entries, *new_entries])
+
+    # With no live message there is nothing to edit — always start fresh.
+    roll = not message_ids
+    if message_ids:
+        if state_day != today:
+            roll = True
+        elif created_at_raw:
+            created_at = datetime.fromisoformat(created_at_raw)
+            if now_dt - created_at > timedelta(hours=roll_after_hours):
+                roll = True
+        # Cap growth: a runaway summary would blow past Telegram's 4096-char
+        # message limit and become unreadable.
+        if len(merged) > max_entries or len(build_text(merged)) > max_chars:
+            roll = True
+
+    if roll:
+        entries = dedup_by_url(list(new_entries))
+        new_ids = send(build_text(entries))
+        new_state = {
+            "message_ids": new_ids,
+            "entries": [list(e) for e in entries],
+            "created_at": now_dt.isoformat(),
+            "day": today,
+        }
+        save_state(new_state)
+        return new_state
+
+    text = build_text(merged)
+    if not edit(message_ids, text):
+        # The current summary can't be edited (deleted, or older than Telegram's
+        # edit window). Clear the stale message if possible, then send a
+        # replacement so the chat isn't left with a frozen, out-of-date summary.
+        if delete is not None:
+            delete(message_ids)
+        message_ids = send(text)
+    new_state = {
+        "message_ids": message_ids,
+        "entries": [list(e) for e in merged],
+        "created_at": created_at_raw or now_dt.isoformat(),
+        "day": state_day or today,
+    }
+    save_state(new_state)
+    return new_state

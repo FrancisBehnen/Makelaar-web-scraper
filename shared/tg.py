@@ -90,6 +90,7 @@ class TelegramClient:
         *,
         reply_markup: dict | None = None,
         reply_to: int | None = None,
+        disable_notification: bool = False,
     ) -> int | None:
         params: dict = {
             "chat_id": chat_id,
@@ -97,6 +98,10 @@ class TelegramClient:
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        # Silent send (no push) — used for the accumulating gone/sold summary so
+        # only genuinely new listings ever notify.
+        if disable_notification:
+            params["disable_notification"] = True
         if reply_markup:
             params["reply_markup"] = reply_markup
         if reply_to:
@@ -133,7 +138,10 @@ class TelegramClient:
         text: str,
         *,
         reply_markup: dict | None = None,
-    ) -> None:
+    ) -> bool:
+        """Edit a message in place (silent). Returns True on success, False when
+        Telegram rejects it (message deleted / past the edit window) so callers
+        can fall back to sending a fresh message."""
         params: dict = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -143,7 +151,7 @@ class TelegramClient:
         }
         if reply_markup is not None:
             params["reply_markup"] = reply_markup
-        self._call("editMessageText", params)
+        return self._call("editMessageText", params) is not None
 
     def delete_message(self, chat_id: str, message_id: int) -> bool:
         """Delete a previously sent message. Telegram only allows this within

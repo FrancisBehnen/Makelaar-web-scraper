@@ -28,17 +28,32 @@ def send_message(
     *,
     reply_markup: dict | None = None,
     reply_to: int | None = None,
+    disable_notification: bool = False,
 ) -> int | None:
     return _client.send_message(
-        chat_id, text, reply_markup=reply_markup, reply_to=reply_to
+        chat_id,
+        text,
+        reply_markup=reply_markup,
+        reply_to=reply_to,
+        disable_notification=disable_notification,
     )
 
 
-def broadcast(text: str, *, reply_markup: dict | None = None) -> dict[str, int]:
-    """Send to every configured chat; returns {chat_id: message_id}."""
+def broadcast(
+    text: str, *, reply_markup: dict | None = None, disable_notification: bool = False
+) -> dict[str, int]:
+    """Send to every configured chat; returns {chat_id: message_id}.
+
+    ``disable_notification`` sends silently (no push) — used for the
+    accumulating gone-summary so only new listings ping the group."""
     message_ids: dict[str, int] = {}
     for chat_id in TELEGRAM_CHAT_IDS:
-        message_id = send_message(chat_id, text, reply_markup=reply_markup)
+        message_id = send_message(
+            chat_id,
+            text,
+            reply_markup=reply_markup,
+            disable_notification=disable_notification,
+        )
         if message_id is not None:
             message_ids[chat_id] = message_id
     return message_ids
@@ -71,8 +86,8 @@ def broadcast_photo(
 
 def edit_text(
     chat_id: str, message_id: int, text: str, *, reply_markup: dict | None = None
-) -> None:
-    _client.edit_text(chat_id, message_id, text, reply_markup=reply_markup)
+) -> bool:
+    return _client.edit_text(chat_id, message_id, text, reply_markup=reply_markup)
 
 
 def delete_message(chat_id: str, message_id: int) -> bool:

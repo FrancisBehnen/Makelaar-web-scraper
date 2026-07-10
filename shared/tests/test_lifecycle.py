@@ -409,3 +409,165 @@ def test_send_replaceable_summary_append_only_default_timestamp():
     )
     # A date-time stamp (dd-mm HH:MM) is auto-generated when none is supplied.
     assert re.search(r"\(\d{2}-\d{2} \d{2}:\d{2}\)", sent[0])
+
+
+# ---------------------------------------------------------------------------
+# dedup_by_url
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_by_url_preserves_first_seen_order():
+    out = lifecycle.dedup_by_url(
+        [("A", "http://a"), ("B", "http://b"), ("A2", "http://a")]
+    )
+    assert out == [("A", "http://a"), ("B", "http://b")]
+
+
+# ---------------------------------------------------------------------------
+# upsert_accumulating_summary
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def _harness(now_value):
+    """A tiny in-memory harness capturing the injected IO of the summary."""
+
+    box = {"state": None}
+    events = []
+
+    def load_state():
+        return box["state"]
+
+    def save_state(state):
+        box["state"] = state
+
+    def edit(message_ids, text):
+        events.append(("edit", list(message_ids), text))
+        return True
+
+    def send(text):
+        events.append(("send", text))
+        return [{"chat_id": "-100", "message_id": 100 + len(events)}]
+
+    def delete(message_ids):
+        events.append(("delete", list(message_ids)))
+
+    build_text = lambda entries: lifecycle.build_summary_text(  # noqa: E731
+        entries, title_template="🗑 {count} {word}", escape=lambda s: s
+    )
+
+    def run(new_entries, *, now=now_value, **kw):
+        return lifecycle.upsert_accumulating_summary(
+            new_entries,
+            load_state=load_state,
+            save_state=save_state,
+            edit=edit,
+            send=send,
+            delete=delete,
+            build_text=build_text,
+            now=lambda: now,
+            **kw,
+        )
+
+    return box, events, run
+
+
+_T0 = datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc)
+
+
+def test_upsert_first_call_sends_then_edits():
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")])
+    assert [e[0] for e in events] == ["send"]  # first message is a send
+    run([("B", "http://b")])
+    # Second call edits the SAME message rather than sending (no push).
+    assert [e[0] for e in events] == ["send", "edit"]
+    # And the edit body accumulates both entries.
+    _, _, text = events[1]
+    assert '<a href="http://a">A</a>' in text
+    assert '<a href="http://b">B</a>' in text
+    assert "2 woningen" in text
+
+
+def test_upsert_accumulates_and_dedups_by_url():
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")])
+    run([("A again", "http://a"), ("B", "http://b")])
+    assert box["state"]["entries"] == [["A", "http://a"], ["B", "http://b"]]
+
+
+def test_upsert_daily_roll_starts_new_message():
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")])
+    next_day = datetime(2026, 7, 11, 9, 0, tzinfo=timezone.utc)
+    run([("B", "http://b")], now=next_day)
+    # A new day => a fresh send (history preserved), NOT an edit.
+    assert [e[0] for e in events] == ["send", "send"]
+    # New message resets to only the new day's entry.
+    assert box["state"]["entries"] == [["B", "http://b"]]
+    assert box["state"]["day"] == "2026-07-11"
+
+
+def test_upsert_entry_cap_rolls_new_message():
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")])
+    run([("B", "http://b"), ("C", "http://c")], max_entries=2)
+    # Merged would be 3 > cap 2 => roll to a fresh message.
+    assert [e[0] for e in events] == ["send", "send"]
+    assert box["state"]["entries"] == [["B", "http://b"], ["C", "http://c"]]
+
+
+def test_upsert_char_cap_rolls_new_message():
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")])
+    run([("B", "http://b")], max_chars=10)  # any real body exceeds 10 chars
+    assert [e[0] for e in events] == ["send", "send"]
+
+
+def test_upsert_roll_after_hours():
+    # Same local day, but the current summary is older than roll_after_hours ->
+    # roll to a fresh message (isolates the age threshold from the day change).
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")], roll_after_hours=2)
+    later = _T0 + timedelta(hours=3)
+    run([("B", "http://b")], now=later, roll_after_hours=2)
+    assert [e[0] for e in events] == ["send", "send"]
+
+
+def test_upsert_edit_failure_deletes_then_resends():
+    box = {"state": None}
+    events = []
+    box["state"] = {
+        "message_ids": [{"chat_id": "-100", "message_id": 5}],
+        "entries": [["A", "http://a"]],
+        "created_at": _T0.isoformat(),
+        "day": "2026-07-10",
+    }
+    build_text = lambda entries: "body"  # noqa: E731
+    result = lifecycle.upsert_accumulating_summary(
+        [("B", "http://b")],
+        load_state=lambda: box["state"],
+        save_state=lambda st: box.__setitem__("state", st),
+        edit=lambda ids, text: events.append(("edit", ids)) or False,
+        send=lambda text: (events.append(("send", text)), [{"chat_id": "-100", "message_id": 9}])[1],
+        delete=lambda ids: events.append(("delete", ids)),
+        build_text=build_text,
+        now=lambda: _T0,
+    )
+    assert [e[0] for e in events] == ["edit", "delete", "send"]
+    assert result["message_ids"] == [{"chat_id": "-100", "message_id": 9}]
+
+
+def test_upsert_state_round_trips_across_restart():
+    # First "process": build up some state.
+    box, events, run = _harness(_T0)
+    run([("A", "http://a")])
+    persisted = box["state"]
+    # Simulate a restart: a brand new harness that only sees persisted state.
+    box2, events2, run2 = _harness(_T0)
+    box2["state"] = persisted
+    run2([("B", "http://b")])
+    # It edited the surviving message rather than sending a new one.
+    assert [e[0] for e in events2] == ["edit"]
+    assert box2["state"]["entries"] == [["A", "http://a"], ["B", "http://b"]]

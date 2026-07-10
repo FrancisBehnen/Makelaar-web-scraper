@@ -10,7 +10,6 @@ so no scrapling/camoufox stubbing is needed here.
 """
 
 import json
-import re
 import sqlite3
 import threading
 import urllib.error
@@ -409,12 +408,14 @@ def test_recheck_respects_batch_size(rdb, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_send_gone_summary_sends_and_stores_ids(rdb, monkeypatch):
+def test_send_gone_summary_first_call_sends_silently(rdb, monkeypatch):
     sent = []
-    monkeypatch.setattr(
-        tg, "broadcast",
-        lambda text, **kw: (sent.append(text), {"-100": 200})[1],
-    )
+
+    def fake_broadcast(text, *, reply_markup=None, disable_notification=False):
+        sent.append({"text": text, "silent": disable_notification})
+        return {"-100": 200}
+
+    monkeypatch.setattr(tg, "broadcast", fake_broadcast)
     monkeypatch.setattr(tg, "delete_message", lambda *a: True)
 
     delisting.send_gone_summary(
@@ -422,10 +423,17 @@ def test_send_gone_summary_sends_and_stores_ids(rdb, monkeypatch):
     )
 
     assert len(sent) == 1
-    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in sent[0]
-    assert '<a href="https://a.nl/9">Achterstraat 9</a>' in sent[0]
-    assert "2 woningen" in sent[0]
-    assert json.loads(db.kv_get("gone_summary_ids")) == {"-100": 200}
+    # Summary is sent SILENTLY (no push — only new listings push).
+    assert sent[0]["silent"] is True
+    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in sent[0]["text"]
+    assert '<a href="https://a.nl/9">Achterstraat 9</a>' in sent[0]["text"]
+    assert "2 woningen" in sent[0]["text"]
+    state = json.loads(db.kv_get("gone_summary_ids"))
+    assert state["message_ids"] == [{"chat_id": "-100", "message_id": 200}]
+    assert state["entries"] == [
+        ["Voorstraat 1", "https://a.nl/1"],
+        ["Achterstraat 9", "https://a.nl/9"],
+    ]
 
 
 def test_send_gone_summary_singular(rdb, monkeypatch):
@@ -440,37 +448,46 @@ def test_send_gone_summary_singular(rdb, monkeypatch):
     assert "1 woningen" not in sent[0]
 
 
-def test_send_gone_summary_append_only_keeps_previous(rdb, monkeypatch):
-    # Default append-only mode: the previous summary is NOT deleted, and the new
-    # one carries a date-time stamp so the history stays distinguishable.
-    monkeypatch.setattr(config, "SUMMARY_APPEND_ONLY", True)
-    db.kv_set("gone_summary_ids", json.dumps({"-100": 150}))
-    deleted = []
+def test_send_gone_summary_second_call_edits_in_place(rdb, monkeypatch):
     sent = []
     monkeypatch.setattr(
-        tg, "delete_message",
-        lambda cid, mid: (deleted.append((cid, mid)), True)[1],
+        tg, "broadcast",
+        lambda text, **kw: (sent.append(text), {"-100": 200})[1],
     )
+    edits = []
     monkeypatch.setattr(
-        tg, "broadcast", lambda text, **kw: (sent.append(text), {"-100": 201})[1]
+        tg, "edit_text",
+        lambda cid, mid, text, **kw: (edits.append((cid, mid, text)), True)[1],
     )
+    monkeypatch.setattr(tg, "delete_message", lambda *a: True)
 
+    delisting.send_gone_summary([("Voorstraat 1", "https://a.nl/1")])
     delisting.send_gone_summary([("Markt 3", "https://a.nl/3")])
-    assert deleted == []
-    assert re.search(r"\(\d{2}-\d{2} \d{2}:\d{2}\)", sent[0])
-    assert json.loads(db.kv_get("gone_summary_ids")) == {"-100": 201}
+
+    # Only ONE send (the first); the second call edits the live message.
+    assert len(sent) == 1
+    assert len(edits) == 1
+    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in edits[0][2]
+    assert '<a href="https://a.nl/3">Markt 3</a>' in edits[0][2]
+    assert "2 woningen" in edits[0][2]
 
 
-def test_send_gone_summary_replace_mode_deletes_previous(rdb, monkeypatch):
-    monkeypatch.setattr(config, "SUMMARY_APPEND_ONLY", False)
-    db.kv_set("gone_summary_ids", json.dumps({"-100": 150}))
+def test_send_gone_summary_edit_failure_sends_fresh(rdb, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        tg, "broadcast",
+        lambda text, **kw: (sent.append(text), {"-100": 200 + len(sent)})[1],
+    )
+    monkeypatch.setattr(tg, "edit_text", lambda *a, **kw: False)  # edit rejected
     deleted = []
     monkeypatch.setattr(
         tg, "delete_message",
         lambda cid, mid: (deleted.append((cid, mid)), True)[1],
     )
-    monkeypatch.setattr(tg, "broadcast", lambda text, **kw: {"-100": 201})
 
+    delisting.send_gone_summary([("Voorstraat 1", "https://a.nl/1")])
     delisting.send_gone_summary([("Markt 3", "https://a.nl/3")])
-    assert ("-100", 150) in deleted
-    assert json.loads(db.kv_get("gone_summary_ids")) == {"-100": 201}
+
+    # Edit failed on the 2nd call -> stale message deleted + fresh send.
+    assert len(sent) == 2
+    assert ("-100", 201) in deleted

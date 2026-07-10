@@ -159,35 +159,59 @@ def recheck_delisted() -> list[tuple[str, str]]:
         mark_checked=lambda row: db.touch_listing_checked(row["id"]),
         gone=lambda row: is_gone(row["url"]),
         on_gone=_delete_listing_messages,
-        on_error=lambda row, exc: log.debug(
+        # Surface (don't swallow) recheck fetch errors so a timeout is visible in
+        # the logs instead of a silent cursor advance.
+        on_error=lambda row, exc: log.warning(
             "Recheck fetch of %s failed: %s", row["url"], exc
         ),
     )
 
 
+def _edit_summary(message_ids: list[dict], text: str) -> bool:
+    """Edit every {chat_id, message_id} of the live summary. True if all edits
+    succeeded (a failure triggers the send-fresh fallback in the engine)."""
+    if not message_ids:
+        return False
+    return all(
+        tg.edit_text(str(entry["chat_id"]), entry["message_id"], text)
+        for entry in message_ids
+    )
+
+
+def _send_summary(text: str) -> list[dict]:
+    """Broadcast the summary SILENTLY (no push) and normalise the returned
+    {chat_id: message_id} dict to the state's list-of-dicts shape."""
+    sent = tg.broadcast(text, disable_notification=True)
+    return [{"chat_id": chat_id, "message_id": mid} for chat_id, mid in sent.items()]
+
+
 def send_gone_summary(listings: list[tuple[str, str]]) -> None:
-    """Send one summary of removed listings.
+    """Update the persistent, accumulating gone-summary (edited in place).
 
     ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
-    address to its listing URL.
-
-    Append-only by default (each batch leaves a timestamped message behind);
-    in replace-mode it deletes the previous summary first. See
-    ``config.SUMMARY_APPEND_ONLY``.
+    address to its listing URL. The summary is a single message per local day
+    that is edited (silently) as more listings go gone, so only genuinely new
+    listings ever push. State survives restarts via the ``kv`` table.
     """
-    prev = db.kv_get(_GONE_SUMMARY_KV)
 
-    def delete_previous() -> None:
-        if prev:
-            for chat_id, message_id in json.loads(prev).items():
-                tg.delete_message(str(chat_id), message_id)
+    def build_text(entries: list[tuple[str, str]]) -> str:
+        return lifecycle.build_summary_text(
+            entries, title_template=_SUMMARY_TITLE, escape=esc
+        )
 
-    message_ids = lifecycle.send_replaceable_summary(
+    def load_state() -> dict | None:
+        raw = db.kv_get(_GONE_SUMMARY_KV)
+        return json.loads(raw) if raw else None
+
+    lifecycle.upsert_accumulating_summary(
         listings,
-        title_template=_SUMMARY_TITLE,
-        escape=esc,
-        delete_previous=delete_previous,
-        broadcast=lambda text: tg.broadcast(text),
-        append_only=config.SUMMARY_APPEND_ONLY,
+        load_state=load_state,
+        save_state=lambda state: db.kv_set(_GONE_SUMMARY_KV, json.dumps(state)),
+        edit=_edit_summary,
+        send=_send_summary,
+        delete=lambda message_ids: [
+            tg.delete_message(str(e["chat_id"]), e["message_id"])
+            for e in message_ids
+        ],
+        build_text=build_text,
     )
-    db.kv_set(_GONE_SUMMARY_KV, json.dumps(message_ids))

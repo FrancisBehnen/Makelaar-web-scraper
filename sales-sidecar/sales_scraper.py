@@ -32,6 +32,11 @@ from shared.tg import escape_html, status_button_row, status_keyboard
 # ---------------------------------------------------------------------------
 
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "120"))
+# Rechecks of sold status via StealthyFetcher (Funda/Pararius) need longer than
+# the main scrape cycle: Funda's Cloudflare solve alone runs 60-120s and the
+# 120s FETCH_TIMEOUT frequently times out, so sold Funda listings were never
+# reliably detected. A separate, longer timeout is used only on the recheck path.
+RECHECK_FETCH_TIMEOUT = int(os.environ.get("RECHECK_FETCH_TIMEOUT", "240"))
 MAX_CONSECUTIVE_FETCH_FAILURES = int(
     os.environ.get("MAX_CONSECUTIVE_FETCH_FAILURES", "3")
 )
@@ -64,16 +69,6 @@ RECHECK_BATCH_SIZE = int(os.environ.get("RECHECK_BATCH_SIZE", "5"))
 SELF_RESTART_MARKER = Path(DB_PATH).parent / ".self_restart_sales"
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))
 DEBUG_DUMP = os.environ.get("DEBUG_DUMP", "").lower() in ("1", "true", "yes")
-# Sold-summary mode. The auto-deletion mechanism is freshly deployed and not yet
-# user-verified, so summaries are append-only (each batch leaves its own
-# timestamped message behind, building a visible history) by default. Set
-# SUMMARY_APPEND_ONLY=0 to resume replace-mode (only the latest batch shown).
-SUMMARY_APPEND_ONLY = os.environ.get("SUMMARY_APPEND_ONLY", "1").lower() not in (
-    "0",
-    "false",
-    "no",
-    "",
-)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # Listing notifications go here (the koop Telegram group).
@@ -338,8 +333,24 @@ def init_db():
     # responder's delisting recheck; supersedes the old fixed rowid ordering).
     if "last_checked_at" not in cols:
         conn.execute("ALTER TABLE sales ADD COLUMN last_checked_at TEXT")
+    # Small key/value store: persists the accumulating sold-summary state across
+    # restarts / self-restarts (was an in-memory global before, which meant a
+    # restart orphaned the live summary and started a new push).
+    conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
     conn.commit()
     return conn
+
+
+def kv_get(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def kv_set(conn, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value)
+    )
+    conn.commit()
 
 
 def get_existing_urls(conn) -> set[str]:
@@ -373,15 +384,35 @@ def _norm_addr(text: str) -> str:
     return (text or "").lower().replace(" ", "").replace("-", "").replace(".", "")
 
 
+# Leading "NNNN XX" postcode (e.g. "2624 DK") that different sources prefix onto
+# the city name with a DIFFERENT letter pair for the same neighbourhood.
+_POSTCODE_PREFIX_RE = re.compile(r"^\s*\d{4}\s*[a-zA-Z]{2}\s*")
+
+
+def _city_token(text: str) -> str:
+    """Reduce a city field to a comparable token.
+
+    Sources spell the same city differently: Funda emits "2624 DJ Delft" while
+    Pararius emits "2624 DK Delft (Voorhof-Hoogbouw)". Comparing the raw strings
+    (even with substring containment) treats these as different cities, so the
+    same apartment gets notified twice. Stripping the leading postcode and any
+    "(neighbourhood)" suffix collapses both to the bare "delft" token.
+    """
+    t = _POSTCODE_PREFIX_RE.sub("", text or "")
+    t = re.sub(r"\(.*?\)", "", t)  # drop a "(neighbourhood)" suffix
+    return t.strip().lower()
+
+
 def find_duplicate(conn, h: dict[str, str]) -> str | None:
     """URL of an existing listing at the same address+city, else None.
 
     Mirrors the responder's find_prior_response: addresses are normalised by
-    stripping spaces, hyphens, dots, and lowercasing; cities match on substring
-    containment so "2624 NM Delft" and "Delft" are considered equal.
+    stripping spaces, hyphens, dots, and lowercasing; cities are reduced to a
+    token (postcode + neighbourhood stripped) and matched on substring
+    containment so "2624 DK Delft (Voorhof)" and "2624 DJ Delft" are equal.
     """
     target_addr = _norm_addr(h.get("straatnaamHuisnummer", ""))
-    target_city = (h.get("plaats", "") or "").lower()
+    target_city = _city_token(h.get("plaats", ""))
     rows = conn.execute(
         "SELECT url, straatnaamHuisnummer, plaats FROM sales WHERE url != ?",
         (h["url"],),
@@ -389,7 +420,7 @@ def find_duplicate(conn, h: dict[str, str]) -> str | None:
     for url, addr, plaats in rows:
         if _norm_addr(addr) != target_addr:
             continue
-        city = (plaats or "").lower()
+        city = _city_token(plaats)
         # Empty string is a substring of anything, mirroring SQL LIKE '%%'.
         if target_city in city or city in target_city:
             return url
@@ -410,8 +441,18 @@ _status_button_row = status_button_row
 _status_keyboard = status_keyboard
 
 
-def _send(chat_ids_raw: str, text: str, *, reply_markup: dict | None = None) -> list[dict]:
-    """Send a Telegram message and return [{"chat_id": ..., "message_id": ...}, ...]."""
+def _send(
+    chat_ids_raw: str,
+    text: str,
+    *,
+    reply_markup: dict | None = None,
+    disable_notification: bool = False,
+) -> list[dict]:
+    """Send a Telegram message and return [{"chat_id": ..., "message_id": ...}, ...].
+
+    ``disable_notification`` sends the message silently (no push); used for the
+    accumulating sold-summary so only genuinely new listings ping the group.
+    """
     sent: list[dict] = []
     if not TELEGRAM_BOT_TOKEN:
         return sent
@@ -426,6 +467,8 @@ def _send(chat_ids_raw: str, text: str, *, reply_markup: dict | None = None) -> 
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        if disable_notification:
+            payload["disable_notification"] = True
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         body = json.dumps(payload).encode()
@@ -515,6 +558,47 @@ def _delete_message(chat_id: str, message_id: int) -> bool:
         return False
 
 
+def _edit_message(chat_id: str, message_id: int, text: str) -> bool:
+    """Edit a previously-sent message in place (silent — no push).
+
+    Returns False on any Telegram error (e.g. "message to edit not found" once
+    the message is deleted, or past the edit window) so the caller can fall back
+    to sending a fresh summary."""
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    body = json.dumps(
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        api_url, data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        resp_body = urllib.request.urlopen(req, timeout=10).read()
+        resp = json.loads(resp_body)
+        return resp.get("ok", False)
+    except Exception as exc:
+        log.warning("Telegram edit %s/%s failed: %s", chat_id, message_id, exc)
+        return False
+
+
+def _edit_messages(message_ids: list[dict], text: str) -> bool:
+    """Edit every {chat_id, message_id} in the summary state. True if all edits
+    succeeded (a partial/total failure triggers the send-fresh fallback)."""
+    if not message_ids:
+        return False
+    return all(
+        _edit_message(str(entry["chat_id"]), entry["message_id"], text)
+        for entry in message_ids
+    )
+
+
 def _delete_listing_messages(conn, url: str) -> tuple[str, str] | None:
     """Delete Telegram messages for a listing and mark it as sold.
 
@@ -542,16 +626,61 @@ def _delete_listing_messages(conn, url: str) -> tuple[str, str] | None:
     return addr or url, url
 
 
+def _sold_siblings(conn, url: str) -> list[tuple[str, str]]:
+    """Propagate a sold transition to same-address listings from OTHER sources.
+
+    The same apartment is often listed on several sites under different URLs
+    (cross-source dedup notifies once but stores every row). When one URL goes
+    sold we want to also clean up the sibling rows — BUT only if the sibling's
+    own page ALSO reads sold. A makelaar occasionally withdraws its listing
+    while the apartment is still live on Funda (the Westvest case); blindly
+    deleting siblings would wrongly remove a live listing. So each sibling is
+    re-checked on its own page (``_is_sold``) before deletion. Returns the
+    ``(address, url)`` pairs actually transitioned.
+    """
+    row = conn.execute(
+        "SELECT straatnaamHuisnummer, plaats FROM sales WHERE url = ?", (url,)
+    ).fetchone()
+    if row is None:
+        return []
+    target_addr = _norm_addr(row[0])
+    target_city = _city_token(row[1])
+    candidates = conn.execute(
+        "SELECT url, straatnaamHuisnummer, plaats FROM sales "
+        "WHERE status = 'available' AND url != ?",
+        (url,),
+    ).fetchall()
+    removed: list[tuple[str, str]] = []
+    for sib_url, sib_addr, sib_plaats in candidates:
+        if _norm_addr(sib_addr) != target_addr:
+            continue
+        sib_city = _city_token(sib_plaats)
+        if not (target_city in sib_city or sib_city in target_city):
+            continue
+        try:
+            if not _is_sold(sib_url):
+                continue  # sibling still live on its own site — leave it be
+        except Exception as exc:
+            log.warning("Sibling sold-check of %s failed: %s", sib_url, exc)
+            continue
+        entry = _delete_listing_messages(conn, sib_url)
+        if entry is not None:
+            removed.append(entry)
+    return removed
+
+
 def process_sold_urls(conn, sold_urls: set[str]) -> list[tuple[str, str]]:
     """Check sold URLs against DB and delete Telegram messages for matches.
 
-    Returns a list of ``(address, url)`` pairs that were transitioned to sold.
+    Returns a list of ``(address, url)`` pairs that were transitioned to sold
+    (including same-address siblings from other sources that also read sold).
     """
     removed: list[tuple[str, str]] = []
     for url in sold_urls:
         entry = _delete_listing_messages(conn, url)
         if entry is not None:
             removed.append(entry)
+            removed.extend(_sold_siblings(conn, url))
     return removed
 
 
@@ -593,7 +722,9 @@ def _stealthy_fetch(url: str) -> bytes:
         solve_cloudflare=True,
         network_idle=True,
     )
-    page = future.result(timeout=FETCH_TIMEOUT)
+    # Rechecks get the longer RECHECK_FETCH_TIMEOUT (Funda's Cloudflare solve
+    # regularly overruns the 120s scrape-cycle timeout).
+    page = future.result(timeout=RECHECK_FETCH_TIMEOUT)
     status = getattr(page, "status", 200)
     if status in (404, 410):
         raise urllib.error.HTTPError(url, status, "Gone", {}, None)
@@ -637,44 +768,61 @@ def recheck_available_listings(conn) -> list[tuple[str, str]]:
         "ORDER BY last_checked_at ASC LIMIT ?",
         (RECHECK_BATCH_SIZE,),
     ).fetchall()
-    return lifecycle.run_recheck(
+    removed = lifecycle.run_recheck(
         rows,
         mark_checked=lambda row: _touch_checked(conn, row[0]),
         gone=lambda row: _is_sold(row[0]),
         on_gone=lambda row: _delete_listing_messages(conn, row[0]),
+        # Surface (don't swallow) recheck fetch/parse errors so a Funda timeout
+        # is visible in the logs instead of silently advancing the cursor.
+        on_error=lambda row, exc: log.warning(
+            "Recheck of %s failed: %s", row[0], exc
+        ),
     )
+    # Propagate each primary sold to same-address siblings on other sources.
+    extra: list[tuple[str, str]] = []
+    for _addr, sold_url in removed:
+        extra.extend(_sold_siblings(conn, sold_url))
+    return removed + extra
 
 
-_last_sold_summary_ids: list[dict] = []
-
+_SOLD_SUMMARY_KV = "sold_summary_state"
 _SOLD_SUMMARY_TITLE = (
     "\U0001f6d1 <b>{count} {word} verkocht/onder bod — bericht(en) verwijderd</b>"
 )
 
 
-def _send_sold_summary(listings: list[tuple[str, str]]) -> None:
-    """Send a summary of removed listings.
+def _send_sold_summary(conn, listings: list[tuple[str, str]]) -> None:
+    """Update the persistent, accumulating sold-summary (edited in place).
 
     ``listings`` is a list of ``(address, url)`` pairs; each bullet links the
-    address to its listing URL.
-
-    Append-only by default (each batch leaves a timestamped message behind); in
-    replace-mode it deletes the previous summary first. See
-    ``SUMMARY_APPEND_ONLY``.
+    address to its listing URL. The summary is a single message per local day
+    that is edited (silently) as more listings sell, so only genuinely new
+    listings ever push. State survives restarts via the ``kv`` table.
     """
-    global _last_sold_summary_ids
 
-    def delete_previous() -> None:
-        for entry in _last_sold_summary_ids:
-            _delete_message(str(entry["chat_id"]), entry["message_id"])
+    def build_text(entries: list[tuple[str, str]]) -> str:
+        return lifecycle.build_summary_text(
+            entries, title_template=_SOLD_SUMMARY_TITLE, escape=escape_html
+        )
 
-    _last_sold_summary_ids = lifecycle.send_replaceable_summary(
+    def load_state() -> dict | None:
+        raw = kv_get(conn, _SOLD_SUMMARY_KV)
+        return json.loads(raw) if raw else None
+
+    lifecycle.upsert_accumulating_summary(
         listings,
-        title_template=_SOLD_SUMMARY_TITLE,
-        escape=escape_html,
-        delete_previous=delete_previous,
-        broadcast=lambda text: _send(TELEGRAM_SALES_CHAT_IDS, text),
-        append_only=SUMMARY_APPEND_ONLY,
+        load_state=load_state,
+        save_state=lambda state: kv_set(conn, _SOLD_SUMMARY_KV, json.dumps(state)),
+        edit=_edit_messages,
+        # Silent send: the summary must never push (only new listings do).
+        send=lambda text: _send(
+            TELEGRAM_SALES_CHAT_IDS, text, disable_notification=True
+        ),
+        delete=lambda message_ids: [
+            _delete_message(str(e["chat_id"]), e["message_id"]) for e in message_ids
+        ],
+        build_text=build_text,
     )
 
 
@@ -2164,7 +2312,7 @@ def run_cycle():
     all_removed = sold_removed + recheck_removed
     if all_removed:
         log.info("Removed %d sold listing(s): %s", len(all_removed), all_removed)
-        _send_sold_summary(all_removed)
+        _send_sold_summary(conn, all_removed)
 
     conn.close()
     return notified_total, counts

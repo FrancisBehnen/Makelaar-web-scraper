@@ -171,6 +171,25 @@ def test_dedup_across_postal_city_variants(db, notifications):
     assert len(notifications) == 1
 
 
+def test_dedup_across_differing_postcode_and_neighbourhood(db, notifications):
+    # THE cross-source bug: Funda emits "2624 DJ Delft" while Pararius emits
+    # "2624 DK Delft (Voorhof-Hoogbouw)" for the same flat. The differing
+    # postcode letters + neighbourhood suffix must not defeat dedup.
+    h1 = _house(url="https://funda.nl/x", plaats="2624 DJ Delft")
+    h2 = _house(
+        url="https://pararius.nl/y", plaats="2624 DK Delft (Voorhof-Hoogbouw)"
+    )
+    existing = s.get_existing_urls(db)
+    s.process_houses(db, [h1, h2], existing, seeding=False)
+    assert len(notifications) == 1
+
+
+def test_city_token_strips_postcode_and_neighbourhood():
+    assert s._city_token("2624 DK Delft (Voorhof-Hoogbouw)") == "delft"
+    assert s._city_token("2624 DJ Delft") == "delft"
+    assert s._city_token("Delft") == "delft"
+
+
 def test_restart_does_not_renotify(db, notifications):
     h = _house(url="https://a.nl/1")
     existing = s.get_existing_urls(db)
@@ -1566,6 +1585,83 @@ def test_process_sold_urls_ignores_unknown_urls(db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Sibling-aware sold propagation (same address, different source URLs)
+# ---------------------------------------------------------------------------
+
+
+def _add_row(db, url, addr="Voorstraat 1", plaats="Delft", status="available"):
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            url, addr, plaats, "€ 250.000", "80 m²", "3 kamers",
+            json.dumps([{"chat_id": "-100", "message_id": 42}]), status,
+        ),
+    )
+    db.commit()
+
+
+def test_sold_sibling_also_sold_is_deleted(db, monkeypatch):
+    # Same flat on two sources; the primary (Roepman) sold. The Funda sibling's
+    # OWN page also reads sold -> it must be deleted too.
+    _add_row(db, "https://roepman.nl/1", plaats="2624 DJ Delft")
+    _add_row(db, "https://funda.nl/1", plaats="2624 DK Delft (Voorhof)")
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    monkeypatch.setattr(s, "_is_sold", lambda url: True)  # sibling page reads sold
+
+    removed = s.process_sold_urls(db, {"https://roepman.nl/1"})
+    urls = {u for _a, u in removed}
+    assert urls == {"https://roepman.nl/1", "https://funda.nl/1"}
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://funda.nl/1",)
+    ).fetchone()
+    assert row[0] == "sold"
+
+
+def test_sold_sibling_still_live_is_left_untouched(db, monkeypatch):
+    # THE Westvest false positive: Roepman withdrew but the same flat is STILL
+    # live on Funda. The sibling's page does NOT read sold -> keep it.
+    _add_row(db, "https://roepman.nl/1", plaats="2624 DJ Delft")
+    _add_row(db, "https://funda.nl/1", plaats="2624 DK Delft (Voorhof)")
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    monkeypatch.setattr(s, "_is_sold", lambda url: False)  # sibling still live
+
+    removed = s.process_sold_urls(db, {"https://roepman.nl/1"})
+    urls = {u for _a, u in removed}
+    assert urls == {"https://roepman.nl/1"}  # sibling not removed
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://funda.nl/1",)
+    ).fetchone()
+    assert row[0] == "available"
+
+
+def test_sold_sibling_different_address_ignored(db, monkeypatch):
+    _add_row(db, "https://roepman.nl/1", addr="Voorstraat 1", plaats="Delft")
+    _add_row(db, "https://funda.nl/2", addr="Markt 9", plaats="Delft")
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    # Would delete everything if address matching were ignored.
+    monkeypatch.setattr(s, "_is_sold", lambda url: True)
+
+    removed = s.process_sold_urls(db, {"https://roepman.nl/1"})
+    urls = {u for _a, u in removed}
+    assert urls == {"https://roepman.nl/1"}
+
+
+# ---------------------------------------------------------------------------
+# kv store (accumulating-summary state persistence)
+# ---------------------------------------------------------------------------
+
+
+def test_kv_round_trips(db):
+    assert s.kv_get(db, "missing") is None
+    s.kv_set(db, "k", "v1")
+    assert s.kv_get(db, "k") == "v1"
+    s.kv_set(db, "k", "v2")  # upsert
+    assert s.kv_get(db, "k") == "v2"
+
+
+# ---------------------------------------------------------------------------
 # recheck_available_listings (universal fallback)
 # ---------------------------------------------------------------------------
 
@@ -1686,86 +1782,78 @@ def test_marloes_sold_records_url():
 
 
 # ---------------------------------------------------------------------------
-# Sold summary message (sent to Telegram, replaces previous summary)
+# Sold summary message (persistent, accumulating, edited in place)
 # ---------------------------------------------------------------------------
 
 
-def test_send_sold_summary_sends_and_stores_ids(monkeypatch):
-    s._last_sold_summary_ids = []
-    sent_texts = []
-    monkeypatch.setattr(
-        s, "_send",
-        lambda chat_ids, text: (
-            sent_texts.append(text),
-            [{"chat_id": "-100", "message_id": 200}],
-        )[1],
-    )
-    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+def _capture_send(monkeypatch):
+    """Stub _send returning fresh ids; captures (disable_notification, text)."""
+    sent = []
 
+    def fake_send(chat_ids, text, *, reply_markup=None, disable_notification=False):
+        sent.append({"text": text, "silent": disable_notification})
+        return [{"chat_id": "-100", "message_id": 200 + len(sent)}]
+
+    monkeypatch.setattr(s, "_send", fake_send)
+    return sent
+
+
+def test_send_sold_summary_first_call_sends_silently(db, monkeypatch):
+    sent = _capture_send(monkeypatch)
     s._send_sold_summary(
-        [("Voorstraat 1", "https://a.nl/1"), ("Achterstraat 9", "https://a.nl/9")]
+        db, [("Voorstraat 1", "https://a.nl/1"), ("Achterstraat 9", "https://a.nl/9")]
     )
+    assert len(sent) == 1
+    # Summary must be sent SILENTLY (no push — only new listings push).
+    assert sent[0]["silent"] is True
+    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in sent[0]["text"]
+    assert "2 woningen" in sent[0]["text"]
+    # State persisted to kv for restart survival.
+    state = json.loads(s.kv_get(db, s._SOLD_SUMMARY_KV))
+    assert state["message_ids"] == [{"chat_id": "-100", "message_id": 201}]
+    assert state["entries"] == [
+        ["Voorstraat 1", "https://a.nl/1"],
+        ["Achterstraat 9", "https://a.nl/9"],
+    ]
 
-    assert len(sent_texts) == 1
-    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in sent_texts[0]
-    assert '<a href="https://a.nl/9">Achterstraat 9</a>' in sent_texts[0]
-    assert "2 woningen" in sent_texts[0]
-    assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 200}]
 
-
-def test_send_sold_summary_append_only_keeps_previous(monkeypatch):
-    # Default append-only mode: the previous summary is NOT deleted, and the new
-    # one carries a date-time stamp so the history stays distinguishable.
-    monkeypatch.setattr(s, "SUMMARY_APPEND_ONLY", True)
-    s._last_sold_summary_ids = [{"chat_id": "-100", "message_id": 150}]
-    deleted_calls = []
-    sent_texts = []
+def test_send_sold_summary_second_call_edits_in_place(db, monkeypatch):
+    sent = _capture_send(monkeypatch)
+    edits = []
     monkeypatch.setattr(
-        s, "_delete_message",
-        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
+        s, "_edit_messages",
+        lambda message_ids, text: (edits.append((message_ids, text)), True)[1],
     )
+
+    s._send_sold_summary(db, [("Voorstraat 1", "https://a.nl/1")])
+    s._send_sold_summary(db, [("Markt 3", "https://a.nl/3")])
+
+    # Only ONE send (the first); the second call edits the live message.
+    assert len(sent) == 1
+    assert len(edits) == 1
+    # The edit body accumulates both listings.
+    assert '<a href="https://a.nl/1">Voorstraat 1</a>' in edits[0][1]
+    assert '<a href="https://a.nl/3">Markt 3</a>' in edits[0][1]
+    assert "2 woningen" in edits[0][1]
+
+
+def test_send_sold_summary_state_survives_restart(db, monkeypatch):
+    # First "process" seeds kv state, then a fresh call (simulating a new
+    # process reading the same DB) must edit rather than send.
+    _capture_send(monkeypatch)
+    s._send_sold_summary(db, [("Voorstraat 1", "https://a.nl/1")])
+
+    edits = []
     monkeypatch.setattr(
-        s, "_send",
-        lambda chat_ids, text: (
-            sent_texts.append(text),
-            [{"chat_id": "-100", "message_id": 201}],
-        )[1],
+        s, "_edit_messages",
+        lambda message_ids, text: (edits.append(text), True)[1],
     )
-
-    s._send_sold_summary([("Markt 3", "https://a.nl/3")])
-
-    assert deleted_calls == []
-    assert re.search(r"\(\d{2}-\d{2} \d{2}:\d{2}\)", sent_texts[0])
-    assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 201}]
+    s._send_sold_summary(db, [("Markt 3", "https://a.nl/3")])
+    assert len(edits) == 1
 
 
-def test_send_sold_summary_replace_mode_deletes_previous(monkeypatch):
-    monkeypatch.setattr(s, "SUMMARY_APPEND_ONLY", False)
-    s._last_sold_summary_ids = [{"chat_id": "-100", "message_id": 150}]
-    deleted_calls = []
-    monkeypatch.setattr(
-        s, "_delete_message",
-        lambda cid, mid: (deleted_calls.append((cid, mid)), True)[1],
-    )
-    monkeypatch.setattr(
-        s, "_send",
-        lambda chat_ids, text: [{"chat_id": "-100", "message_id": 201}],
-    )
-
-    s._send_sold_summary([("Markt 3", "https://a.nl/3")])
-
-    assert ("-100", 150) in deleted_calls
-    assert s._last_sold_summary_ids == [{"chat_id": "-100", "message_id": 201}]
-
-
-def test_send_sold_summary_singular(monkeypatch):
-    s._last_sold_summary_ids = []
-    sent_texts = []
-    monkeypatch.setattr(
-        s, "_send",
-        lambda chat_ids, text: (sent_texts.append(text), [])[1],
-    )
-    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
-
-    s._send_sold_summary([("Voorstraat 1", "https://a.nl/1")])
-    assert "1 woning" in sent_texts[0]
+def test_send_sold_summary_singular(db, monkeypatch):
+    sent = _capture_send(monkeypatch)
+    s._send_sold_summary(db, [("Voorstraat 1", "https://a.nl/1")])
+    assert "1 woning" in sent[0]["text"]
+    assert "1 woningen" not in sent[0]["text"]
