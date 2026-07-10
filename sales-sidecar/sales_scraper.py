@@ -321,7 +321,8 @@ def init_db():
             kamers TEXT,
             tg_message_ids TEXT DEFAULT '',
             status TEXT DEFAULT 'available',
-            last_checked_at TEXT
+            last_checked_at TEXT,
+            sold_reason TEXT
         )
         """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
@@ -333,6 +334,14 @@ def init_db():
     # responder's delisting recheck; supersedes the old fixed rowid ordering).
     if "last_checked_at" not in cols:
         conn.execute("ALTER TABLE sales ADD COLUMN last_checked_at TEXT")
+    # sold_reason records WHY a row went sold: 'explicit' (a positive sold/onder
+    # bod status on the page or feed) vs 'gone' (a 404/410 or a mere
+    # disappearance). Cross-source reconciliation trusts an *explicit* sold as
+    # authoritative for the whole property (delete lagging siblings) but stays
+    # conservative on a *gone* (a withdrawn duplicate may still be for sale
+    # elsewhere). NULL on legacy rows sold before this migration.
+    if "sold_reason" not in cols:
+        conn.execute("ALTER TABLE sales ADD COLUMN sold_reason TEXT")
     # Small key/value store: persists the accumulating sold-summary state across
     # restarts / self-restarts (was an in-memory global before, which meant a
     # restart orphaned the live summary and started a new push).
@@ -599,11 +608,15 @@ def _edit_messages(message_ids: list[dict], text: str) -> bool:
     )
 
 
-def _delete_listing_messages(conn, url: str) -> tuple[str, str] | None:
+def _delete_listing_messages(
+    conn, url: str, reason: str = "explicit"
+) -> tuple[str, str] | None:
     """Delete Telegram messages for a listing and mark it as sold.
 
-    Returns an ``(address, url)`` pair if the listing was transitioned, else
-    None.
+    ``reason`` records WHY the row went sold ('explicit' vs 'gone'); it is
+    persisted alongside the status so later cross-source reconciliation can tell
+    an authoritative sold from an ambiguous disappearance. Returns an
+    ``(address, url)`` pair if the listing was transitioned, else None.
     """
     row = conn.execute(
         "SELECT tg_message_ids, status, straatnaamHuisnummer FROM sales WHERE url = ?",
@@ -619,24 +632,38 @@ def _delete_listing_messages(conn, url: str) -> tuple[str, str] | None:
         for entry in json.loads(tg_ids_raw):
             _delete_message(str(entry["chat_id"]), entry["message_id"])
 
-    conn.execute("UPDATE sales SET status = 'sold' WHERE url = ?", (url,))
+    conn.execute(
+        "UPDATE sales SET status = 'sold', sold_reason = ? WHERE url = ?",
+        (reason, url),
+    )
     conn.commit()
 
     log.info("Marked sold and deleted TG message(s): %s (%s)", addr, url)
     return addr or url, url
 
 
-def _sold_siblings(conn, url: str) -> list[tuple[str, str]]:
+def _sold_siblings(
+    conn, url: str, *, primary_reason: str
+) -> list[tuple[str, str]]:
     """Propagate a sold transition to same-address listings from OTHER sources.
 
     The same apartment is often listed on several sites under different URLs
-    (cross-source dedup notifies once but stores every row). When one URL goes
-    sold we want to also clean up the sibling rows — BUT only if the sibling's
-    own page ALSO reads sold. A makelaar occasionally withdraws its listing
-    while the apartment is still live on Funda (the Westvest case); blindly
-    deleting siblings would wrongly remove a live listing. So each sibling is
-    re-checked on its own page (``_is_sold``) before deletion. Returns the
-    ``(address, url)`` pairs actually transitioned.
+    (cross-source dedup notifies once but stores every row). How we propagate to
+    the sibling rows depends on WHY the primary went sold:
+
+    * ``primary_reason == 'explicit'`` — a positive sold/onder-bod status was
+      asserted (page phrase/badge, feed statusOrig, or a Realworks /verkocht/
+      URL). That is authoritative for the whole PHYSICAL property: lagging
+      portals still showing it available simply haven't caught up yet, so their
+      stale cards are deleted UNCONDITIONALLY (no per-sibling page re-check —
+      that lag is exactly what we're fixing).
+    * ``primary_reason == 'gone'`` — the primary merely disappeared (404/410 or
+      dropped out of a feed with no sold status). That is ambiguous: a makelaar
+      may have withdrawn a duplicate listing while the flat is still for sale
+      elsewhere (the Westvest case). So we stay conservative and delete a
+      sibling only if its OWN page also reads sold (``_sold_reason``).
+
+    Returns the ``(address, url)`` pairs actually transitioned.
     """
     row = conn.execute(
         "SELECT straatnaamHuisnummer, plaats FROM sales WHERE url = ?", (url,)
@@ -657,13 +684,23 @@ def _sold_siblings(conn, url: str) -> list[tuple[str, str]]:
         sib_city = _city_token(sib_plaats)
         if not (target_city in sib_city or sib_city in target_city):
             continue
+        if primary_reason == "explicit":
+            # Property is sold -> delete the lagging sibling regardless of what
+            # its own (stale) page still shows.
+            entry = _delete_listing_messages(conn, sib_url, "explicit")
+            if entry is not None:
+                removed.append(entry)
+            continue
+        # Conservative (gone) branch: only propagate if the sibling itself reads
+        # sold, recording its own computed reason.
         try:
-            if not _is_sold(sib_url):
-                continue  # sibling still live on its own site — leave it be
+            sib_reason = _sold_reason(sib_url)
         except Exception as exc:
             log.warning("Sibling sold-check of %s failed: %s", sib_url, exc)
             continue
-        entry = _delete_listing_messages(conn, sib_url)
+        if sib_reason is None:
+            continue  # sibling still live on its own site — leave it be
+        entry = _delete_listing_messages(conn, sib_url, sib_reason)
         if entry is not None:
             removed.append(entry)
     return removed
@@ -672,15 +709,16 @@ def _sold_siblings(conn, url: str) -> list[tuple[str, str]]:
 def process_sold_urls(conn, sold_urls: set[str]) -> list[tuple[str, str]]:
     """Check sold URLs against DB and delete Telegram messages for matches.
 
-    Returns a list of ``(address, url)`` pairs that were transitioned to sold
-    (including same-address siblings from other sources that also read sold).
+    These are all in-cycle *explicit* sold detections (feed statusOrig sold,
+    Realworks /verkocht/, card badges), so propagation to same-address siblings
+    is authoritative. Returns the ``(address, url)`` pairs transitioned to sold.
     """
     removed: list[tuple[str, str]] = []
     for url in sold_urls:
-        entry = _delete_listing_messages(conn, url)
+        entry = _delete_listing_messages(conn, url, "explicit")
         if entry is not None:
             removed.append(entry)
-            removed.extend(_sold_siblings(conn, url))
+            removed.extend(_sold_siblings(conn, url, primary_reason="explicit"))
     return removed
 
 
@@ -731,19 +769,46 @@ def _stealthy_fetch(url: str) -> bytes:
     return page.body
 
 
-def _is_sold(url: str) -> bool:
-    """Page-scoped sold check for one listing URL (404/410 also counts)."""
+def _sold_reason(url: str) -> str | None:
+    """Classify a listing page as ``'explicit'`` / ``'gone'`` / ``None``.
+
+    Fetches the page via the same StealthyFetcher/plain-HTTP routing the recheck
+    uses, then distinguishes the two kinds of "sold" that the reconciliation
+    policy treats differently:
+
+    * ``'explicit'`` — the page reads sold (an unambiguous status phrase or a
+      status badge in the header region, via ``lifecycle.reads_gone``). This is
+      a positive assertion the property is under contract.
+    * ``'gone'`` — the page 404/410s (the listing was pulled). Ambiguous on its
+      own: the flat may still be for sale on another portal.
+    * ``None`` — the page is still live.
+
+    Non-HTTP fetch errors propagate so the caller can skip without deciding.
+    """
     fetch = (
         _stealthy_fetch
         if _needs_stealthy_recheck(url)
         else lambda u: _http_get(u, timeout=15)
     )
-    return lifecycle.is_gone(
-        url,
-        fetch=fetch,
+    try:
+        body = fetch(url)
+    except urllib.error.HTTPError as exc:
+        return "gone" if exc.code in lifecycle.DEFAULT_GONE_HTTP_CODES else None
+    if lifecycle.reads_gone(
+        body.decode("utf-8", errors="ignore"),
         page_status_re=_SOLD_PAGE_STATUS_RE,
         badge_status_re=_SOLD_BADGE_STATUS_RE,
-    )
+    ):
+        return "explicit"
+    return None
+
+
+def _is_sold(url: str) -> bool:
+    """Page-scoped sold check for one listing URL (404/410 also counts).
+
+    Thin bool wrapper over :func:`_sold_reason` for callers that don't care WHY.
+    """
+    return _sold_reason(url) is not None
 
 
 def _touch_checked(conn, url: str) -> None:
@@ -768,22 +833,137 @@ def recheck_available_listings(conn) -> list[tuple[str, str]]:
         "ORDER BY last_checked_at ASC LIMIT ?",
         (RECHECK_BATCH_SIZE,),
     ).fetchall()
+    # Remember the reason each primary went sold so sibling propagation can be
+    # reason-aware (explicit -> delete lagging siblings; gone -> conservative).
+    reasons: dict[str, str] = {}
+
+    def _gone(row):
+        reason = _sold_reason(row[0])
+        if reason is not None:
+            reasons[row[0]] = reason
+            return True
+        return False
+
     removed = lifecycle.run_recheck(
         rows,
         mark_checked=lambda row: _touch_checked(conn, row[0]),
-        gone=lambda row: _is_sold(row[0]),
-        on_gone=lambda row: _delete_listing_messages(conn, row[0]),
+        gone=_gone,
+        on_gone=lambda row: _delete_listing_messages(
+            conn, row[0], reasons.get(row[0], "explicit")
+        ),
         # Surface (don't swallow) recheck fetch/parse errors so a Funda timeout
         # is visible in the logs instead of silently advancing the cursor.
         on_error=lambda row, exc: log.warning(
             "Recheck of %s failed: %s", row[0], exc
         ),
     )
-    # Propagate each primary sold to same-address siblings on other sources.
+    # Propagate each primary sold to same-address siblings on other sources,
+    # passing the reason so an explicit sold cleans up lagging siblings while a
+    # gone stays conservative.
     extra: list[tuple[str, str]] = []
     for _addr, sold_url in removed:
-        extra.extend(_sold_siblings(conn, sold_url))
+        extra.extend(
+            _sold_siblings(
+                conn, sold_url, primary_reason=reasons.get(sold_url, "explicit")
+            )
+        )
     return removed + extra
+
+
+def reconcile_cross_source(conn) -> list[tuple[str, str]]:
+    """Clean up existing cross-source lag: available rows whose sibling is sold.
+
+    ``recheck_available_listings`` / ``process_sold_urls`` only propagate at the
+    MOMENT a row goes sold. This per-cycle pass catches the standing state where
+    an available row A already has a same-address (+ city-token) sibling S that
+    is sold — e.g. Funda sold last cycle but Pararius still lingers. The policy
+    mirrors ``_sold_siblings``: an *explicit* sold on S is authoritative for the
+    whole property (delete A), a *gone* on S is not (leave A for the normal
+    per-page recheck).
+
+    Legacy rows sold before the ``sold_reason`` migration carry NULL; for those
+    we do ONE bounded re-fetch of S's page (``_sold_reason``) to backfill the
+    reason and decide — capped at ``RECHECK_BATCH_SIZE`` per cycle so a backlog
+    of legacy siblings can't trigger a burst of StealthyFetch calls.
+
+    Returns the ``(address, url)`` pairs transitioned to sold.
+    """
+    available = conn.execute(
+        "SELECT url, straatnaamHuisnummer, plaats FROM sales "
+        "WHERE status = 'available'"
+    ).fetchall()
+    # Snapshot the sold rows once; rows we mark sold below aren't re-considered
+    # as siblings this cycle (cascades are picked up next cycle — keeps bounded).
+    sold_rows = conn.execute(
+        "SELECT url, straatnaamHuisnummer, plaats, sold_reason FROM sales "
+        "WHERE status = 'sold'"
+    ).fetchall()
+
+    removed: list[tuple[str, str]] = []
+    # One shared budget for every legacy re-fetch this cycle (both the sibling S
+    # and the conservative A fallback fetch count), so a backlog of legacy rows
+    # can't fan out into a burst of StealthyFetch calls.
+    refetch_budget = RECHECK_BATCH_SIZE
+    for a_url, a_addr, a_plaats in available:
+        a_norm = _norm_addr(a_addr)
+        a_city = _city_token(a_plaats)
+        match = None
+        for s_url, s_addr, s_plaats, s_reason in sold_rows:
+            if _norm_addr(s_addr) != a_norm:
+                continue
+            s_city = _city_token(s_plaats)
+            if a_city in s_city or s_city in a_city:
+                match = (s_url, s_reason)
+                break
+        if match is None:
+            continue
+        s_url, s_reason = match
+
+        if s_reason == "explicit":
+            entry = _delete_listing_messages(conn, a_url, "explicit")
+            if entry is not None:
+                removed.append(entry)
+        elif s_reason == "gone":
+            # Ambiguous sold — do not propagate; the per-page recheck handles A.
+            continue
+        else:
+            # Legacy NULL reason: one bounded re-fetch of S decides.
+            if refetch_budget <= 0:
+                continue
+            refetch_budget -= 1
+            try:
+                backfilled = _sold_reason(s_url)
+            except Exception as exc:
+                log.warning("Reconcile re-fetch of %s failed: %s", s_url, exc)
+                continue
+            if backfilled is None:
+                # S no longer even reads sold — can't decide; leave for a later
+                # cycle rather than guess.
+                continue
+            # Persist the decision so this expensive re-fetch isn't repeated.
+            conn.execute(
+                "UPDATE sales SET sold_reason = ? WHERE url = ?",
+                (backfilled, s_url),
+            )
+            conn.commit()
+            if backfilled == "explicit":
+                entry = _delete_listing_messages(conn, a_url, "explicit")
+                if entry is not None:
+                    removed.append(entry)
+            elif refetch_budget > 0:
+                # S is 'gone' — conservative: only delete A if A's own page
+                # reads sold too (counts against the same re-fetch budget).
+                refetch_budget -= 1
+                try:
+                    a_reason = _sold_reason(a_url)
+                except Exception as exc:
+                    log.warning("Reconcile re-fetch of %s failed: %s", a_url, exc)
+                    continue
+                if a_reason is not None:
+                    entry = _delete_listing_messages(conn, a_url, a_reason)
+                    if entry is not None:
+                        removed.append(entry)
+    return removed
 
 
 _SOLD_SUMMARY_KV = "sold_summary_state"
@@ -2309,7 +2489,10 @@ def run_cycle():
 
     sold_removed = process_sold_urls(conn, _cycle_sold_urls)
     recheck_removed = recheck_available_listings(conn)
-    all_removed = sold_removed + recheck_removed
+    # Reconcile standing cross-source lag (available rows whose sibling already
+    # went sold in an earlier cycle). Folded into the same batched summary.
+    reconcile_removed = reconcile_cross_source(conn)
+    all_removed = sold_removed + recheck_removed + reconcile_removed
     if all_removed:
         log.info("Removed %d sold listing(s): %s", len(all_removed), all_removed)
         _send_sold_summary(conn, all_removed)

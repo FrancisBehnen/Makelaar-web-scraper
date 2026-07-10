@@ -1603,12 +1603,12 @@ def _add_row(db, url, addr="Voorstraat 1", plaats="Delft", status="available"):
 
 
 def test_sold_sibling_also_sold_is_deleted(db, monkeypatch):
-    # Same flat on two sources; the primary (Roepman) sold. The Funda sibling's
-    # OWN page also reads sold -> it must be deleted too.
+    # Same flat on two sources; the primary (Roepman) sold. process_sold_urls
+    # is an *explicit* sold detection -> the property is under contract, so the
+    # lagging Funda sibling is deleted unconditionally (no per-sibling re-check).
     _add_row(db, "https://roepman.nl/1", plaats="2624 DJ Delft")
     _add_row(db, "https://funda.nl/1", plaats="2624 DK Delft (Voorhof)")
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
-    monkeypatch.setattr(s, "_is_sold", lambda url: True)  # sibling page reads sold
 
     removed = s.process_sold_urls(db, {"https://roepman.nl/1"})
     urls = {u for _a, u in removed}
@@ -1619,33 +1619,299 @@ def test_sold_sibling_also_sold_is_deleted(db, monkeypatch):
     assert row[0] == "sold"
 
 
-def test_sold_sibling_still_live_is_left_untouched(db, monkeypatch):
-    # THE Westvest false positive: Roepman withdrew but the same flat is STILL
-    # live on Funda. The sibling's page does NOT read sold -> keep it.
+def test_explicit_sold_deletes_lagging_sibling_even_if_its_page_live(db, monkeypatch):
+    # THE Bosboom case: Funda shows the flat explicitly Verkocht, but Pararius
+    # is LAGGING and its own page still reads available. An explicit sold on any
+    # source is authoritative for the whole property, so the lagging sibling is
+    # deleted anyway (its page is NOT re-checked in the explicit branch).
+    _add_row(db, "https://funda.nl/1", plaats="2624 DJ Delft")
+    _add_row(db, "https://pararius.nl/1", plaats="2624 DK Delft (Voorhof)")
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    # Sibling page still live — must NOT be consulted for an explicit primary.
+    monkeypatch.setattr(
+        s, "_sold_reason", lambda url: pytest.fail("sibling page re-checked")
+    )
+
+    removed = s.process_sold_urls(db, {"https://funda.nl/1"})
+    urls = {u for _a, u in removed}
+    assert urls == {"https://funda.nl/1", "https://pararius.nl/1"}
+    row = db.execute(
+        "SELECT status, sold_reason FROM sales WHERE url = ?",
+        ("https://pararius.nl/1",),
+    ).fetchone()
+    assert row == ("sold", "explicit")
+
+
+def test_gone_primary_sibling_still_live_is_left_untouched(db, monkeypatch):
+    # THE Westvest guard: a *gone* (disappearance, not explicit sold) primary is
+    # ambiguous — a makelaar may have withdrawn a duplicate while the flat is
+    # still for sale elsewhere. So a gone primary only propagates to a sibling
+    # whose OWN page also reads sold. Here the sibling is still live -> keep it.
     _add_row(db, "https://roepman.nl/1", plaats="2624 DJ Delft")
     _add_row(db, "https://funda.nl/1", plaats="2624 DK Delft (Voorhof)")
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
-    monkeypatch.setattr(s, "_is_sold", lambda url: False)  # sibling still live
+    monkeypatch.setattr(s, "_sold_reason", lambda url: None)  # sibling still live
 
-    removed = s.process_sold_urls(db, {"https://roepman.nl/1"})
-    urls = {u for _a, u in removed}
-    assert urls == {"https://roepman.nl/1"}  # sibling not removed
+    removed = s._sold_siblings(db, "https://roepman.nl/1", primary_reason="gone")
+    assert removed == []
     row = db.execute(
         "SELECT status FROM sales WHERE url = ?", ("https://funda.nl/1",)
     ).fetchone()
     assert row[0] == "available"
 
 
+def test_gone_primary_sibling_also_sold_is_deleted(db, monkeypatch):
+    # A gone primary DOES propagate to a sibling whose own page reads sold.
+    _add_row(db, "https://roepman.nl/1", plaats="2624 DJ Delft")
+    _add_row(db, "https://funda.nl/1", plaats="2624 DK Delft (Voorhof)")
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    monkeypatch.setattr(s, "_sold_reason", lambda url: "explicit")  # sibling sold
+
+    removed = s._sold_siblings(db, "https://roepman.nl/1", primary_reason="gone")
+    urls = {u for _a, u in removed}
+    assert urls == {"https://funda.nl/1"}
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://funda.nl/1",)
+    ).fetchone()
+    assert row[0] == "sold"
+
+
 def test_sold_sibling_different_address_ignored(db, monkeypatch):
     _add_row(db, "https://roepman.nl/1", addr="Voorstraat 1", plaats="Delft")
     _add_row(db, "https://funda.nl/2", addr="Markt 9", plaats="Delft")
     monkeypatch.setattr(s, "_delete_message", lambda *a: True)
-    # Would delete everything if address matching were ignored.
-    monkeypatch.setattr(s, "_is_sold", lambda url: True)
 
+    # Explicit primary would delete every available sibling — but address
+    # matching must confine propagation to the same physical property.
     removed = s.process_sold_urls(db, {"https://roepman.nl/1"})
     urls = {u for _a, u in removed}
     assert urls == {"https://roepman.nl/1"}
+
+
+# ---------------------------------------------------------------------------
+# _sold_reason (explicit / gone / None classification of a page fetch)
+# ---------------------------------------------------------------------------
+
+
+def test_sold_reason_explicit_on_status_phrase(db, monkeypatch):
+    monkeypatch.setattr(
+        s, "_http_get",
+        lambda url, timeout=15: b"<html><h1>Voorstraat 1</h1>"
+        b"<p>Verkocht onder voorbehoud</p></html>",
+    )
+    assert s._sold_reason("https://a.nl/1") == "explicit"
+    assert s._is_sold("https://a.nl/1") is True
+
+
+def test_sold_reason_gone_on_404(db, monkeypatch):
+    def _raise_404(url, timeout=15):
+        raise s.urllib.error.HTTPError(url, 404, "Gone", {}, None)
+
+    monkeypatch.setattr(s, "_http_get", _raise_404)
+    assert s._sold_reason("https://a.nl/1") == "gone"
+    assert s._is_sold("https://a.nl/1") is True
+
+
+def test_sold_reason_none_on_live_page(db, monkeypatch):
+    monkeypatch.setattr(
+        s, "_http_get",
+        lambda url, timeout=15: b"<html><h1>Voorstraat 1</h1>"
+        b"<p>Te koop Beschikbaar</p></html>",
+    )
+    assert s._sold_reason("https://a.nl/1") is None
+    assert s._is_sold("https://a.nl/1") is False
+
+
+# ---------------------------------------------------------------------------
+# reconcile_cross_source (clean up existing cross-source lag)
+# ---------------------------------------------------------------------------
+
+
+def _add_row_reason(db, url, status, reason=None, addr="Voorstraat 1",
+                    plaats="Delft"):
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status, sold_reason) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            url, addr, plaats, "€ 250.000", "80 m²", "3 kamers",
+            json.dumps([{"chat_id": "-100", "message_id": 42}]), status, reason,
+        ),
+    )
+    db.commit()
+
+
+def test_reconcile_explicit_sold_sibling_cleans_up_available(db, monkeypatch):
+    # An available row whose same-address sibling is already sold *explicitly*
+    # -> the property is sold, so the lingering available card is removed.
+    _add_row_reason(db, "https://pararius.nl/1", "available", plaats="2624 DJ Delft")
+    _add_row_reason(
+        db, "https://funda.nl/1", "sold", reason="explicit",
+        plaats="2624 DK Delft (Voorhof)",
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+
+    removed = s.reconcile_cross_source(db)
+    urls = {u for _a, u in removed}
+    assert urls == {"https://pararius.nl/1"}
+    row = db.execute(
+        "SELECT status, sold_reason FROM sales WHERE url = ?",
+        ("https://pararius.nl/1",),
+    ).fetchone()
+    assert row == ("sold", "explicit")
+
+
+def test_reconcile_gone_sold_sibling_leaves_available_alone(db, monkeypatch):
+    # A gone-reason sold sibling is ambiguous -> do NOT propagate; the available
+    # row is left for the normal per-page recheck to handle.
+    _add_row_reason(db, "https://pararius.nl/1", "available", plaats="2624 DJ Delft")
+    _add_row_reason(
+        db, "https://funda.nl/1", "sold", reason="gone",
+        plaats="2624 DK Delft (Voorhof)",
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+
+    removed = s.reconcile_cross_source(db)
+    assert removed == []
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://pararius.nl/1",)
+    ).fetchone()
+    assert row[0] == "available"
+
+
+def test_reconcile_legacy_null_sibling_refetch_explicit_propagates(db, monkeypatch):
+    # Legacy row marked sold before the migration (sold_reason IS NULL): a single
+    # re-fetch decides. Here the re-fetch says explicit -> backfill + propagate.
+    _add_row_reason(db, "https://pararius.nl/1", "available", plaats="2624 DJ Delft")
+    _add_row_reason(
+        db, "https://funda.nl/1", "sold", reason=None,
+        plaats="2624 DK Delft (Voorhof)",
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    monkeypatch.setattr(s, "_sold_reason", lambda url: "explicit")
+
+    removed = s.reconcile_cross_source(db)
+    urls = {u for _a, u in removed}
+    assert urls == {"https://pararius.nl/1"}
+    # The legacy sibling's reason is backfilled so it isn't re-fetched again.
+    row = db.execute(
+        "SELECT sold_reason FROM sales WHERE url = ?", ("https://funda.nl/1",)
+    ).fetchone()
+    assert row[0] == "explicit"
+
+
+def test_reconcile_legacy_null_sibling_refetch_gone_does_not_propagate(db, monkeypatch):
+    # Legacy NULL sibling re-fetch says gone -> backfill gone, do NOT propagate
+    # (A's own page is checked instead; here A is still live -> kept).
+    _add_row_reason(db, "https://pararius.nl/1", "available", plaats="2624 DJ Delft")
+    _add_row_reason(
+        db, "https://funda.nl/1", "sold", reason=None,
+        plaats="2624 DK Delft (Voorhof)",
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+
+    # S re-fetch -> gone; A's own page -> still live (None).
+    def _reason(url):
+        return "gone" if "funda" in url else None
+
+    monkeypatch.setattr(s, "_sold_reason", _reason)
+
+    removed = s.reconcile_cross_source(db)
+    assert removed == []
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://pararius.nl/1",)
+    ).fetchone()
+    assert row[0] == "available"
+    # Backfilled so the expensive re-fetch isn't repeated every cycle.
+    srow = db.execute(
+        "SELECT sold_reason FROM sales WHERE url = ?", ("https://funda.nl/1",)
+    ).fetchone()
+    assert srow[0] == "gone"
+
+
+def test_reconcile_no_sold_sibling_is_noop(db, monkeypatch):
+    _add_row_reason(db, "https://pararius.nl/1", "available", addr="Markt 3")
+    _add_row_reason(
+        db, "https://funda.nl/1", "sold", reason="explicit", addr="Kerkstraat 9"
+    )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    assert s.reconcile_cross_source(db) == []
+
+
+def test_reconcile_legacy_refetch_is_bounded(db, monkeypatch):
+    # More legacy NULL siblings than RECHECK_BATCH_SIZE -> only a bounded number
+    # of re-fetches happen in one cycle (a cycle can't blow up on StealthyFetch).
+    monkeypatch.setattr(s, "RECHECK_BATCH_SIZE", 2)
+    for i in range(5):
+        _add_row_reason(
+            db, f"https://pararius.nl/{i}", "available",
+            addr=f"Straat {i}", plaats="Delft",
+        )
+        _add_row_reason(
+            db, f"https://funda.nl/{i}", "sold", reason=None,
+            addr=f"Straat {i}", plaats="Delft",
+        )
+    monkeypatch.setattr(s, "_delete_message", lambda *a: True)
+    calls = []
+
+    def _reason(url):
+        calls.append(url)
+        return "gone"  # never propagates, so all 5 available rows survive
+
+    monkeypatch.setattr(s, "_sold_reason", _reason)
+    s.reconcile_cross_source(db)
+    # At most RECHECK_BATCH_SIZE legacy siblings re-fetched this cycle.
+    assert len(calls) <= 2
+
+
+# ---------------------------------------------------------------------------
+# sold_reason column migration
+# ---------------------------------------------------------------------------
+
+
+def test_init_db_adds_sold_reason_column(tmp_path, monkeypatch):
+    monkeypatch.setattr(s, "DB_PATH", str(tmp_path / "sales.sqlite"))
+    conn = s.init_db()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
+    assert "sold_reason" in cols
+    conn.close()
+
+
+def test_init_db_sold_reason_migration_idempotent(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "sales.sqlite")
+    monkeypatch.setattr(s, "DB_PATH", db_path)
+    # Pre-migration schema (no sold_reason) with an existing row.
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE sales (
+            url TEXT PRIMARY KEY,
+            straatnaamHuisnummer TEXT,
+            plaats TEXT,
+            vraagprijs TEXT,
+            oppervlakte TEXT,
+            kamers TEXT
+        )
+    """)
+    conn.execute(
+        "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?)",
+        ("https://a.nl/1", "Voorstraat 1", "Delft", "€ 250.000", "80 m²", "3 kamers"),
+    )
+    conn.commit()
+    conn.close()
+
+    # First migration adds the column; existing row keeps NULL sold_reason.
+    conn = s.init_db()
+    row = conn.execute(
+        "SELECT status, sold_reason FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row == ("available", None)
+    conn.close()
+
+    # Re-running init_db is a no-op (guard prevents a duplicate-column error).
+    conn = s.init_db()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sales)")}
+    assert "sold_reason" in cols
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
