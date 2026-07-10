@@ -54,8 +54,18 @@ def _summary_now() -> datetime:
 # HTTP statuses that mean the listing page is gone for good.
 DEFAULT_GONE_HTTP_CODES = frozenset({404, 410})
 
-# Window (chars) around the listing's <h1> in which a bare status badge counts.
+# Window (chars) read *forward* from the listing's <h1> in which a bare status
+# badge counts.
 DEFAULT_HEADER_REGION = 1500
+
+# Window (chars) read *backward* from the listing's <h1>. Some sites render the
+# status banner just ABOVE the address heading rather than below it. Funda koop,
+# for example, puts its "Verkocht onder voorbehoud" badge as the first child of
+# the detail's `#about` block, ~300 chars before the <h1> — a forward-only window
+# never sees it. This lookback is kept small (and, like the forward window, runs
+# on the script/style- and sidebar/footer-stripped body) so it stays inside the
+# page's own header area and can't reach a "recent verkocht/verhuurd" carousel.
+DEFAULT_HEADER_LOOKBACK = 500
 
 # Sidebar / footer carousels ("gerelateerd aanbod", "recent verhuurd/verkocht")
 # hold OTHER listings' cards. Their status badges must never be read as the
@@ -77,11 +87,22 @@ SCRIPT_RE = re.compile(
 )
 
 
-def header_region(body: str, window: int = DEFAULT_HEADER_REGION) -> str:
-    """Return the slice around the listing's <h1> where a badge is trusted."""
+def header_region(
+    body: str,
+    window: int = DEFAULT_HEADER_REGION,
+    lookback: int = DEFAULT_HEADER_LOOKBACK,
+) -> str:
+    """Return the slice around the listing's <h1> where a badge is trusted.
+
+    The slice spans ``lookback`` chars *before* the <h1> through ``window`` chars
+    *after* it, so a badge rendered just above the address heading (e.g. Funda's
+    "Verkocht onder voorbehoud" banner) is covered as well as one below it. When
+    there is no <h1> the region is anchored at the body start (lookback is a
+    no-op there).
+    """
     m = re.search(r"<h1\b", body, re.IGNORECASE)
     start = m.start() if m else 0
-    return body[start : start + window]
+    return body[max(0, start - lookback) : start + window]
 
 
 def reads_gone(
@@ -90,6 +111,7 @@ def reads_gone(
     page_status_re: re.Pattern[str] | None,
     badge_status_re: re.Pattern[str],
     window: int = DEFAULT_HEADER_REGION,
+    lookback: int = DEFAULT_HEADER_LOOKBACK,
 ) -> bool:
     """Page-scoped gone/sold detection (see module docstring).
 
@@ -97,13 +119,14 @@ def reads_gone(
     body (after stripping <script>/<style>/<noscript>/<template> blocks — which
     on SPA pages embed an i18n string table — and sidebar/footer carousels).
     ``badge_status_re`` matches bare status badges but only inside the page's
-    header region (also computed from the script-free body).
+    header region (also computed from the script-free body) — the span from
+    ``lookback`` chars before the <h1> through ``window`` chars after it.
     """
     body = SCRIPT_RE.sub(" ", html)
     body = SIDEBAR_RE.sub(" ", body)
     if page_status_re is not None and page_status_re.search(body):
         return True
-    return bool(badge_status_re.search(header_region(body, window)))
+    return bool(badge_status_re.search(header_region(body, window, lookback)))
 
 
 def is_gone(
@@ -113,6 +136,7 @@ def is_gone(
     page_status_re: re.Pattern[str] | None,
     badge_status_re: re.Pattern[str],
     window: int = DEFAULT_HEADER_REGION,
+    lookback: int = DEFAULT_HEADER_LOOKBACK,
     gone_http_codes: frozenset[int] = DEFAULT_GONE_HTTP_CODES,
 ) -> bool:
     """Return True when the listing page is a 404/410 or reads as gone/sold.
@@ -131,6 +155,7 @@ def is_gone(
         page_status_re=page_status_re,
         badge_status_re=badge_status_re,
         window=window,
+        lookback=lookback,
     )
 
 

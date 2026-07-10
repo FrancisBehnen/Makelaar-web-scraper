@@ -135,6 +135,84 @@ def test_reads_gone_ignores_badge_inside_script():
 
 
 # ---------------------------------------------------------------------------
+# Funda koop: sold banner rendered ABOVE the <h1> (badge-before-h1 regression)
+# ---------------------------------------------------------------------------
+
+# The koop vocabulary the sales-sidecar passes in.
+KOOP_PAGE_RE = re.compile(
+    r"deze woning is verkocht|status:\s*verkocht", re.IGNORECASE
+)
+KOOP_BADGE_RE = re.compile(r"verkocht|onder bod|onder voorbehoud", re.IGNORECASE)
+
+# Trimmed from the real live markup of the Achterom 1-B detail page: Funda emits
+# its "Verkocht onder voorbehoud" badge as the first child of the `#about` block,
+# ~290 chars BEFORE the address <h1> — a forward-only header window never sees it.
+FUNDA_SOLD_HEADER = (
+    '<div class="mx-auto -mr-4 -ml-4 h-px bg-neutral-20"></div>'
+    '<div class="relative m-auto mt-6 flex flex-col gap-0 lg:grid">'
+    '<div><div class="border-b border-solid border-neutral-20 pb-4" id="about">'
+    '<div class="flex items-baseline mb-2 lg:mb-4">'
+    '<div class="bg-red-70 inline-block rounded-xs px-2 text-xs font-bold '
+    'text-white">Verkocht onder voorbehoud</div></div>'
+    '<div class="grid grid-cols-[1fr_auto] gap-2"><div>'
+    '<div class="relative flex justify-between" city="Delft" postcode="2611PL">'
+    '<h1 class="md:pr-[4.2rem]" data-global-id="8050233">'
+    '<span class="block text-2xl font-bold">Achterom 1-B</span>'
+    '<span class="text-neutral-40">2611 PL Delft</span></h1></div></div>'
+)
+
+
+def test_reads_gone_funda_sold_banner_above_h1():
+    # THE bug: the sold badge sits just above the address <h1>. Detection must
+    # find it via the backward lookback in the header region.
+    assert lifecycle.reads_gone(
+        f"<html><body>{FUNDA_SOLD_HEADER}</body></html>",
+        page_status_re=KOOP_PAGE_RE,
+        badge_status_re=KOOP_BADGE_RE,
+    )
+
+
+def test_reads_gone_funda_live_recent_sold_carousel_not_gone():
+    # A LIVE Funda koop listing: the address <h1> carries NO status badge above
+    # or below it, and the only "verkocht" on the page lives in a "recent
+    # verkocht" carousel (an <aside>) AND in the JS bundle's i18n string table
+    # (a <script>). Neither may mark this live listing as sold.
+    body = (
+        "<html><head>"
+        '<script>window.__i18n={soldStatus:"Verkocht onder voorbehoud",'
+        'foo:"bar"}</script></head><body>'
+        '<div class="border-b" id="about"><div class="flex items-baseline">'
+        '<div class="grid"><div>'
+        '<div class="relative flex justify-between" city="Delft">'
+        '<h1 data-global-id="1"><span>Nieuwstraat 5</span>'
+        "<span>2611 AA Delft</span></h1></div></div>"
+        "<div>Vraagprijs 250.000 k.k. — 3 kamers — beschikbaar</div></div>"
+        '<aside><h2>Recent verkocht in de buurt</h2>'
+        "<div>Marktplein 4 — Verkocht onder voorbehoud</div>"
+        "<div>Havenweg 8 — Verkocht</div></aside>"
+        "</body></html>"
+    )
+    assert not lifecycle.reads_gone(
+        body, page_status_re=KOOP_PAGE_RE, badge_status_re=KOOP_BADGE_RE
+    )
+
+
+def test_reads_gone_lookback_bounded_not_whole_page():
+    # The backward lookback must stay small: a "verkocht" badge far ABOVE the
+    # <h1> (beyond the lookback window, and not inside a stripped sidebar) must
+    # NOT be read as this listing's status.
+    body = (
+        "<html><body><section>Uitgelicht: Parklaan 9 — Verkocht</section>"
+        + "<div>filler</div>" * 200
+        + "<main><h1>Nieuwstraat 5</h1>Vraagprijs 250.000, beschikbaar"
+        "</main></body></html>"
+    )
+    assert not lifecycle.reads_gone(
+        body, page_status_re=KOOP_PAGE_RE, badge_status_re=KOOP_BADGE_RE
+    )
+
+
+# ---------------------------------------------------------------------------
 # is_gone (fetch + HTTP-code mapping)
 # ---------------------------------------------------------------------------
 
