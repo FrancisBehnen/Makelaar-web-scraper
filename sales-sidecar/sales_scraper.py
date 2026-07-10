@@ -389,8 +389,17 @@ def save_house(conn, h: dict[str, str]) -> None:
     conn.commit()
 
 
+_PROPERTY_TYPE_PREFIX_RE = re.compile(
+    r"^(appartement|woonhuis|eengezinswoning|studio|kamer|"
+    r"bovenwoning|benedenwoning|tussenwoning|hoekwoning|"
+    r"penthouse|maisonnette|herenhuis|villa)\s+",
+    re.IGNORECASE,
+)
+
+
 def _norm_addr(text: str) -> str:
-    return (text or "").lower().replace(" ", "").replace("-", "").replace(".", "")
+    t = _PROPERTY_TYPE_PREFIX_RE.sub("", (text or "").strip())
+    return t.lower().replace(" ", "").replace("-", "").replace(".", "")
 
 
 # Leading "NNNN XX" postcode (e.g. "2624 DK") that different sources prefix onto

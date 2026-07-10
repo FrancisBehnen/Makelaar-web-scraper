@@ -202,6 +202,15 @@ def test_restart_does_not_renotify(db, notifications):
     assert len(notifications) == 1  # no second notification
 
 
+def test_norm_addr_strips_property_type_prefix():
+    assert s._norm_addr("Appartement Martinus Nijhofflaan 2 J 9") == s._norm_addr("Martinus Nijhofflaan 2 J9")
+    assert s._norm_addr("Woonhuis Voorstraat 12") == s._norm_addr("Voorstraat 12")
+    assert s._norm_addr("Studio Buitenwatersloot 5") == s._norm_addr("Buitenwatersloot 5")
+    assert s._norm_addr("Penthouse Markt 1") == s._norm_addr("Markt 1")
+    # Non-prefix words are kept
+    assert s._norm_addr("Appartementsweg 3") != s._norm_addr("sweg 3")
+
+
 def test_distinct_addresses_both_notify(db, notifications):
     h1 = _house(url="https://a.nl/1", straatnaamHuisnummer="Markt 3")
     h2 = _house(url="https://b.nl/2", straatnaamHuisnummer="Markt 4")

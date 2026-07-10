@@ -6,10 +6,24 @@ WAL mode keeps the file shareable between all three containers.
 """
 
 import json
+import re
 import sqlite3
 import threading
 
 from config import DB_PATH
+
+_PROPERTY_TYPE_PREFIX_RE = re.compile(
+    r"^(appartement|woonhuis|eengezinswoning|studio|kamer|"
+    r"bovenwoning|benedenwoning|tussenwoning|hoekwoning|"
+    r"penthouse|maisonnette|herenhuis|villa)\s+",
+    re.IGNORECASE,
+)
+
+
+def _norm_addr(text: str) -> str:
+    t = _PROPERTY_TYPE_PREFIX_RE.sub("", (text or "").strip())
+    return t.lower().replace(" ", "").replace("-", "").replace(".", "")
+
 
 _local = threading.local()
 
@@ -21,6 +35,7 @@ def conn() -> sqlite3.Connection:
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA busy_timeout=30000")
+        c.create_function("norm_addr", 1, _norm_addr)
         _local.conn = c
     return c
 
@@ -227,8 +242,9 @@ def update_response(response_id: int, **fields) -> None:
 def find_prior_response(url: str) -> sqlite3.Row | None:
     """Return the most recent notified response for the same address+city, different URL.
 
-    Normalises addresses by stripping spaces, hyphens, and dots so
-    '2 J 9', '2-J9', and '2.J.9' all match.
+    Normalises addresses by stripping property-type prefixes (e.g. "Appartement"),
+    spaces, hyphens, and dots so 'Appartement Voorstraat 2 J 9' and 'Voorstraat
+    2-J9' both match.
     City comparison uses substring containment to handle postal-code prefixes
     like '2624 NM Delft' vs 'Delft'.
     """
@@ -241,8 +257,8 @@ def find_prior_response(url: str) -> sqlite3.Row | None:
         JOIN houses new_h  ON new_h.url  = ?
         WHERE r.url != ?
           AND r.status NOT IN ('seeded', 'cancelled', 'duplicate')
-          AND lower(replace(replace(replace(h.straatnaamHuisnummer, ' ', ''), '-', ''), '.', ''))
-              = lower(replace(replace(replace(new_h.straatnaamHuisnummer, ' ', ''), '-', ''), '.', ''))
+          AND norm_addr(h.straatnaamHuisnummer)
+              = norm_addr(new_h.straatnaamHuisnummer)
           AND (lower(h.plaats) LIKE '%' || lower(new_h.plaats) || '%'
                OR lower(new_h.plaats) LIKE '%' || lower(h.plaats) || '%')
         ORDER BY r.created_at DESC
