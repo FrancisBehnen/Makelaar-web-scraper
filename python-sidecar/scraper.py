@@ -213,6 +213,16 @@ _ROOM_URL_RE = re.compile(
 )
 _ROOM_TITLE_RE = re.compile(r"\bstudentenkamer\b|\bkamer\b|\broom\b", re.IGNORECASE)
 
+_JUNK_RE = re.compile(
+    r"\b("
+    r"parkeerplaats|parkeerplek|garagebox|garage|berging|"
+    r"bouwgrond|kavel|opslag|"
+    r"bedrijfspand|bedrijfsruimte|bedrijfshal|"
+    r"kantoorruimte|winkelruimte|praktijkruimte|horeca"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def is_non_independent_dwelling(house: dict[str, str]) -> bool:
     """True for shared-facility rooms (onzelfstandige woonruimte)."""
@@ -221,6 +231,11 @@ def is_non_independent_dwelling(house: dict[str, str]) -> bool:
     if _ROOM_TITLE_RE.search(house.get("straatnaamHuisnummer", "") or ""):
         return True
     return False
+
+
+def is_junk_listing(house: dict[str, str]) -> bool:
+    """True for non-dwelling listings (parking, commercial, storage, plots)."""
+    return bool(_JUNK_RE.search(house.get("straatnaamHuisnummer", "") or ""))
 
 
 def make_absolute(href: str, base: str) -> str:
@@ -2872,6 +2887,13 @@ def _persist_new_houses(conn, name, houses, existing_urls, all_new):
         log.info("%s: filtered out %d non-independent dwelling(s)", name, dropped)
     if not independent:
         return
+    dwellings = [h for h in independent if not is_junk_listing(h)]
+    junk_dropped = len(independent) - len(dwellings)
+    if junk_dropped:
+        log.info("%s: filtered out %d non-dwelling listing(s)", name, junk_dropped)
+    if not dwellings:
+        return
+    independent = dwellings
     save_houses(conn, independent)
     all_new.extend(independent)
     existing_urls.update(h["url"] for h in independent)

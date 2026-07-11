@@ -74,3 +74,31 @@ def test_repeated_same_url_is_not_counted_as_wedge(monkeypatch):
 
     assert exited == []
     assert scraper._consecutive_fetch_failures == 1
+
+
+# ---------------------------------------------------------------------------
+# Junk filter (non-dwelling listings)
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("Bedrijfspand Voorstraat 12", True),
+        ("Kantoorruimte Markt 5", True),
+        ("Bedrijfsruimte Delftweg 3", True),
+        ("Bedrijfshal Industrieweg 7", True),
+        ("Winkelruimte Choorstraat 2", True),
+        ("Praktijkruimte Oude Delft 1", True),
+        ("Horeca Beestenmarkt 9", True),
+        ("Parkeerplaats 42", True),
+        ("Garagebox Voorstraat", True),
+        ("Voorstraat 1", False),
+        ("Garagepad 4", False),
+    ],
+)
+def test_is_junk_listing(title, expected):
+    house = {"straatnaamHuisnummer": title}
+    assert scraper.is_junk_listing(house) is expected

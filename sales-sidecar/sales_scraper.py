@@ -212,7 +212,9 @@ def bedrooms_to_kamers(bedrooms: int) -> str:
 _JUNK_RE = re.compile(
     r"\b("
     r"parkeerplaats|parkeerplek|garagebox|garage|berging|"
-    r"bouwgrond|kavel|opslag"
+    r"bouwgrond|kavel|opslag|"
+    r"bedrijfspand|bedrijfsruimte|bedrijfshal|"
+    r"kantoorruimte|winkelruimte|praktijkruimte|horeca"
     r")\b",
     re.IGNORECASE,
 )

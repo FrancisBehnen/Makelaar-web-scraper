@@ -447,6 +447,13 @@ def test_realworks_roepman_saleprice_and_div_entry():
         ("Bouwgrond Delftweg", True),
         ("Kavel 5", True),
         ("Opslag unit 9", True),
+        ("Bedrijfspand Voorstraat 12", True),
+        ("Bedrijfsruimte Markt 5", True),
+        ("Bedrijfshal Industrieweg 7", True),
+        ("Kantoorruimte Delftweg 3", True),
+        ("Winkelruimte Choorstraat 2", True),
+        ("Praktijkruimte Oude Delft 1", True),
+        ("Horeca Beestenmarkt 9", True),
         ("Voorstraat 1", False),
         ("Garagepad 4", False),  # word-boundary: not "garage"
         ("Bergingang 2", False),  # not "berging" as a whole word
