@@ -162,6 +162,15 @@ WOONZEKER_SITEMAP_URL = (
 WOONZEKER_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("WOONZEKER_MAX_FETCHES_PER_CYCLE", "20")
 )
+# Same Nuxt/MarketSuite platform as Woonzeker, but nationwide (not
+# Delft-focused) — most of its ~210 listings live outside the target area, so
+# the per-cycle cap matters even more here.
+SCHEPVASTGOEDMANAGERS_SITEMAP_URL = (
+    "https://zoeken.schepvastgoedmanagers.nl/__sitemap__/properties-0.xml"
+)
+SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE = int(
+    os.environ.get("SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE", "20")
+)
 HAYMANREALESTATE_URL = "https://haymanrealestate.nl/woningen/te-huur"
 # Optional session cookie for Huurstunt. The site gates listing detail behind
 # an email magic-link login (no password, plus reCAPTCHA), so the session can't
@@ -2582,6 +2591,150 @@ def scrape_woonzeker_via_sitemap(
 
 
 # ---------------------------------------------------------------------------
+# Schep Vastgoedmanagers via sitemap + per-listing plain HTTP
+# ---------------------------------------------------------------------------
+# Same Nuxt/MarketSuite platform as Woonzeker (schema.org RealEstateListing
+# ld+json + .property-characteristics__label/__value pairs), so the parser
+# mirrors it closely. Two platform quirks to know:
+#  - streetAddress always ends in a literal " null" (house_number_extension
+#    is baked into house_number itself, e.g. "2b" — the extension field is
+#    always null but still gets string-concatenated in), so it must be
+#    stripped.
+#  - Huurprijs renders Dutch decimal notation ("€ 1.152,55 p/m"); like
+#    Huurflits, the ",XX" cents suffix must be stripped before
+#    parse_price_euros (which treats "." as a thousands separator) or the
+#    cents get folded into the euro value.
+
+def _parse_schepvastgoedmanagers_listing(url: str, body: bytes) -> dict[str, str] | None:
+    a = Adaptor(content=body, url=url)
+
+    city = ""
+    address = ""
+    for script in a.css('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(script.text or script.get_all_text() or "{}")
+            loc = data.get("contentLocation", {}).get("address", {})
+            city = loc.get("addressLocality", "").strip()
+            address = loc.get("streetAddress", "").strip()
+            if city or address:
+                break
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    address = re.sub(r"\s*null\s*$", "", address, flags=re.I).strip()
+
+    if city and not is_delft_area(city):
+        return None
+
+    fields: dict[str, str] = {}
+    labels = a.css(".property-characteristics__label")
+    values = a.css(".property-characteristics__value")
+    for lbl, val in zip(labels, values):
+        key = (lbl.text or lbl.get_all_text() or "").strip().lower().rstrip(":").strip()
+        v = (val.text or val.get_all_text() or "").strip()
+        if key:
+            fields[key] = v
+
+    price = fields.get("huurprijs", "")
+    # "€ 1.152,55 p/m" — strip the Dutch cents suffix before parse_price_euros.
+    price_clean = re.sub(r",\d{2}.*$", "", price).strip()
+    price_val = parse_price_euros(price_clean)
+    if price_val and price_val > MAX_PRICE:
+        return None
+
+    area = fields.get("woonoppervlakte", "")
+    rooms_raw = fields.get("kamers", "")
+    rooms = ""
+    if rooms_raw.isdigit():
+        n = rooms_raw
+        rooms = "1 kamer" if n == "1" else f"{n} kamers"
+    elif rooms_raw:
+        rooms = rooms_raw
+
+    if not address:
+        return None
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": address,
+        "plaats": city or "Onbekend",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_schepvastgoedmanagers_via_sitemap(
+    existing_urls: set[str],
+) -> list[dict[str, str]]:
+    try:
+        sitemap = _http_get(SCHEPVASTGOEDMANAGERS_SITEMAP_URL)
+    except Exception as exc:
+        log.warning("Schep Vastgoedmanagers: sitemap fetch failed: %s", exc)
+        return []
+
+    try:
+        root = ET.fromstring(sitemap)
+    except ET.ParseError as exc:
+        log.warning("Schep Vastgoedmanagers: sitemap parse failed: %s", exc)
+        return []
+
+    all_urls: list[str] = []
+    for u in root.findall("sm:url", _SITEMAP_NS):
+        loc = u.find("sm:loc", _SITEMAP_NS)
+        if loc is not None and loc.text:
+            all_urls.append(loc.text)
+    log.info("Schep Vastgoedmanagers: sitemap has %d total URLs", len(all_urls))
+
+    candidates = [
+        u for u in all_urls
+        if "/huur/woningen/" in u
+        and u.rstrip("/") != "https://zoeken.schepvastgoedmanagers.nl/huur/woningen"
+    ]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "Schep Vastgoedmanagers: %d rental listing URL(s), %d new",
+        len(candidates), len(new_candidates),
+    )
+
+    if len(new_candidates) > SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE:
+        log.info(
+            "Schep Vastgoedmanagers: capping detail fetches at %d this cycle",
+            SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE,
+        )
+        new_candidates = new_candidates[:SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE]
+
+    houses: list[dict[str, str]] = []
+    consecutive_failures = 0
+    max_consecutive_failures = 3
+    for url in new_candidates:
+        try:
+            body = _http_get(url, timeout=15)
+        except Exception as exc:
+            consecutive_failures += 1
+            log.warning("Schep Vastgoedmanagers: detail fetch failed for %s: %s", url, exc)
+            if consecutive_failures >= max_consecutive_failures:
+                log.warning(
+                    "Schep Vastgoedmanagers: %d consecutive failures — aborting remaining %d fetches (site likely blocking)",
+                    consecutive_failures,
+                    len(new_candidates) - new_candidates.index(url) - 1,
+                )
+                break
+            continue
+        consecutive_failures = 0
+        try:
+            listing = _parse_schepvastgoedmanagers_listing(url, body)
+        except Exception as exc:
+            log.warning("Schep Vastgoedmanagers: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("Schep Vastgoedmanagers: %d new rental match(es) in Delft area", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Hayman Real Estate parser (Webflow CMS, server-rendered)
 # ---------------------------------------------------------------------------
 # Listing cards are rendered into the static HTML by Webflow CMS; no browser
@@ -2733,6 +2886,7 @@ CUSTOM_SITES = [
     ("ikwilhuren.nu", scrape_ikwilhuren_via_http),
     ("Woonzeker", scrape_woonzeker_via_sitemap),
     ("Hayman Real Estate", scrape_haymanrealestate_via_http),
+    ("Schep Vastgoedmanagers", scrape_schepvastgoedmanagers_via_sitemap),
 ]
 
 
