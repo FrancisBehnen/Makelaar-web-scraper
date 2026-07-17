@@ -1567,6 +1567,44 @@ def test_delete_listing_messages_no_tg_ids_still_marks_sold(db, monkeypatch):
     assert row[0] == "sold"
 
 
+def test_delete_listing_messages_edits_when_delete_fails(db, monkeypatch):
+    """Past Telegram's 48h delete window deleteMessage 400s; we must fall back
+    to editing the card so it reads 'sold' instead of lingering as live."""
+    msg_ids = [{"chat_id": "-100", "message_id": 42}]
+    db.execute(
+        "INSERT INTO sales (url, straatnaamHuisnummer, plaats, vraagprijs, "
+        "oppervlakte, kamers, tg_message_ids, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "https://a.nl/1", "Voorstraat 1", "Delft",
+            "€ 250.000", "80 m²", "3 kamers",
+            json.dumps(msg_ids), "available",
+        ),
+    )
+    db.commit()
+
+    monkeypatch.setattr(s, "_delete_message", lambda cid, mid: False)
+    edit_calls = []
+    monkeypatch.setattr(
+        s, "_edit_message",
+        lambda cid, mid, text: (edit_calls.append((cid, mid, text)), True)[1],
+    )
+
+    result = s._delete_listing_messages(db, "https://a.nl/1")
+    assert result == ("Voorstraat 1", "https://a.nl/1")
+
+    assert len(edit_calls) == 1
+    cid, mid, text = edit_calls[0]
+    assert (cid, mid) == ("-100", 42)
+    assert "Verkocht / onder bod" in text
+    assert "Voorstraat 1" in text
+
+    row = db.execute(
+        "SELECT status FROM sales WHERE url = ?", ("https://a.nl/1",)
+    ).fetchone()
+    assert row[0] == "sold"
+
+
 def test_process_sold_urls_returns_addresses(db, monkeypatch):
     msg_ids = [{"chat_id": "-100", "message_id": 55}]
     db.execute(

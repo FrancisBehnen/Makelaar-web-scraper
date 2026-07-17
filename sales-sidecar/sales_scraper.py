@@ -19,6 +19,7 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -573,9 +574,39 @@ def _delete_message(chat_id: str, message_id: int) -> bool:
         resp_body = urllib.request.urlopen(req, timeout=10).read()
         resp = json.loads(resp_body)
         return resp.get("ok", False)
+    except urllib.error.HTTPError as exc:
+        # Surface Telegram's ``description`` (e.g. "message can't be deleted for
+        # everyone" past the 48h window) — the bare HTTPError string only says
+        # "400 Bad Request", which hid exactly this bug.
+        try:
+            detail = exc.read().decode("utf-8", "replace")
+        except Exception:
+            detail = ""
+        log.warning(
+            "Telegram delete %s/%s failed: %s %s", chat_id, message_id, exc, detail
+        )
+        return False
     except Exception as exc:
         log.warning("Telegram delete %s/%s failed: %s", chat_id, message_id, exc)
         return False
+
+
+def _sold_marker_text(addr: str, url: str, reason: str) -> str:
+    """In-place replacement text for a sold listing whose original notification
+    can't be deleted.
+
+    Telegram only lets a bot delete its own messages for 48 hours; a listing
+    that sells has almost always been on the market longer than that, so the
+    delete fails and the live card would otherwise linger. ``editMessageText``
+    has no such time limit, so we edit the card to mark it sold instead — the
+    group never shows a stale "available" listing.
+    """
+    label = "Niet meer beschikbaar" if reason == "gone" else "Verkocht / onder bod"
+    return (
+        f"\U0001f6d1 <b>{escape_html(label)}</b>\n"
+        f"<s>{escape_html(addr or url)}</s>\n"
+        f"{escape_html(url)}"
+    )
 
 
 def _edit_message(chat_id: str, message_id: int, text: str) -> bool:
@@ -640,8 +671,15 @@ def _delete_listing_messages(
         return None
 
     if tg_ids_raw:
+        marker = _sold_marker_text(addr, url, reason)
         for entry in json.loads(tg_ids_raw):
-            _delete_message(str(entry["chat_id"]), entry["message_id"])
+            cid, mid = str(entry["chat_id"]), entry["message_id"]
+            if not _delete_message(cid, mid):
+                # Delete failed (almost always Telegram's 48h limit on a bot
+                # deleting its own messages). Fall back to editing the card in
+                # place so it reads "sold" rather than lingering as a live
+                # listing above the summary.
+                _edit_message(cid, mid, marker)
 
     conn.execute(
         "UPDATE sales SET status = 'sold', sold_reason = ? WHERE url = ?",
@@ -979,7 +1017,7 @@ def reconcile_cross_source(conn) -> list[tuple[str, str]]:
 
 _SOLD_SUMMARY_KV = "sold_summary_state"
 _SOLD_SUMMARY_TITLE = (
-    "\U0001f6d1 <b>{count} {word} verkocht/onder bod — bericht(en) verwijderd</b>"
+    "\U0001f6d1 <b>{count} {word} verkocht/onder bod — bericht(en) opgeruimd</b>"
 )
 
 
