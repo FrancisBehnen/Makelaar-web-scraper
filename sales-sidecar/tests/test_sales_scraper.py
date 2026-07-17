@@ -1191,15 +1191,15 @@ def test_marloes_koop_skips_sold():
 def test_psgwonen_koop_uses_prinsenstad_parser():
     pytest.importorskip("scrapling.parser")
     body = _prinsenstad_detail(
-        "Beschikbaar", "Te koop: Landelaan 15F104, 2282 GD Rijswijk"
+        "Beschikbaar", "Te koop: Landelaan 15F104, 2611 AB Delft"
     )
     h = s._parse_prinsenstad_koop_listing(
-        "https://www.psg-wonen.nl/woningaanbod/koop/rijswijk/landelaan/15f104",
+        "https://www.psg-wonen.nl/woningaanbod/koop/delft/landelaan/15f104",
         body,
     )
     assert h is not None
     assert h["straatnaamHuisnummer"] == "Landelaan 15F104"
-    assert h["plaats"] == "Rijswijk"
+    assert h["plaats"] == "Delft"
 
 
 PSGWONEN_SALE_SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
