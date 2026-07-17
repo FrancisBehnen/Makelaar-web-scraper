@@ -2139,3 +2139,231 @@ def test_send_sold_summary_singular(db, monkeypatch):
     s._send_sold_summary(db, [("Voorstraat 1", "https://a.nl/1")])
     assert "1 woning" in sent[0]["text"]
     assert "1 woningen" not in sent[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# VanHuyse Makelaars koop (realworks_wonen sitemap index + detail pages)
+# ---------------------------------------------------------------------------
+
+
+def _vanhuyse_detail(
+    status: str = "Beschikbaar",
+    address: str = "Voorstraat 1, 2611 AB Delft",
+    price: str = "&euro; 235.000,- k.k.",
+    kamers: str = "2",
+    slaapkamers: str = "1",
+    oppervlakte: str = "60 m<sup>2</sup>",
+) -> bytes:
+    return f"""
+    <html><body>
+      <section>
+        <div class="kenmerken-list">
+          <h3>Overdracht</h3>
+          <ul>
+            <li><span class="label">Adres: </span><span class="value">{address}</span></li>
+            <li><span class="label">Vraagprijs: </span><span class="value">{price}</span></li>
+            <li><span class="label">Status: </span><span class="value">{status}</span></li>
+          </ul>
+        </div>
+        <div class="kenmerken-list">
+          <h3>Oppervlakte en inhoud</h3>
+          <ul>
+            <li><span class="label">Woonoppervlakte: </span><span class="value">{oppervlakte}</span></li>
+          </ul>
+        </div>
+        <div class="kenmerken-list">
+          <h3>Indeling</h3>
+          <ul>
+            <li><span class="label">Totaal aantal kamers: </span><span class="value">{kamers}</span></li>
+            <li><span class="label">Aantal slaapkamers: </span><span class="value">{slaapkamers}</span></li>
+          </ul>
+        </div>
+      </section>
+    </body></html>
+    """.encode()
+
+
+def test_vanhuyse_koop_available_kept():
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail()
+    h = s._parse_vanhuyse_koop_listing(
+        "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/voorstraat-1/",
+        body,
+    )
+    assert h is not None
+    assert h["straatnaamHuisnummer"] == "Voorstraat 1"
+    assert h["plaats"] == "2611 AB Delft"
+    assert "235.000" in h["vraagprijs"]
+    assert h["oppervlakte"] == "60 m²"
+    # Already TOTAL kamers ("Totaal aantal kamers: 2" with 1 slaapkamer) — no
+    # bedrooms_to_kamers conversion should be applied (that would wrongly
+    # yield "2 kamers" from bedrooms=1 too, so also check kamers isn't derived
+    # from the slaapkamers field instead).
+    assert h["kamers"] == "2 kamers"
+    assert s.passes_filters(h) is True
+
+
+def test_vanhuyse_koop_rooms_not_bedroom_converted():
+    """Totaal aantal kamers is stored verbatim, not run through bedrooms+1.
+
+    Uses kamers=4/slaapkamers=2 so a wrongly-applied bedrooms_to_kamers(2)
+    ("3 kamers") would visibly diverge from the correct "4 kamers" — unlike
+    kamers=3/slaapkamers=2, where bedrooms_to_kamers(2) happens to also equal
+    "3 kamers" and the test wouldn't catch the bug.
+    """
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail(kamers="4", slaapkamers="2")
+    h = s._parse_vanhuyse_koop_listing("https://www.vanhuyse.nl/x/", body)
+    assert h is not None
+    assert h["kamers"] == "4 kamers"
+
+
+def test_vanhuyse_koop_studio_below_room_gate():
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail(kamers="1", slaapkamers="0")
+    h = s._parse_vanhuyse_koop_listing("https://www.vanhuyse.nl/x/", body)
+    assert h is not None
+    assert h["kamers"] == "1 kamer"
+    assert s.passes_filters(h) is False  # < 2 kamers
+
+
+def test_vanhuyse_koop_sold_skipped():
+    pytest.importorskip("scrapling.parser")
+    s._cycle_sold_urls.clear()
+    body = _vanhuyse_detail(status="Verkocht")
+    url = "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/voorstraat-1/"
+    h = s._parse_vanhuyse_koop_listing(url, body)
+    assert h is None
+    assert url in s._cycle_sold_urls
+
+
+def test_vanhuyse_koop_onder_bod_skipped():
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail(status="Onder bod")
+    h = s._parse_vanhuyse_koop_listing("https://www.vanhuyse.nl/x/", body)
+    assert h is None
+
+
+def test_vanhuyse_koop_skips_other_city():
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail(address="Voorstraat 1, 2011 AB Haarlem")
+    h = s._parse_vanhuyse_koop_listing("https://www.vanhuyse.nl/x/", body)
+    assert h is None
+
+
+def test_vanhuyse_koop_price_above_cap_filtered():
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail(price="&euro; 450.000,- k.k.")
+    h = s._parse_vanhuyse_koop_listing("https://www.vanhuyse.nl/x/", body)
+    assert h is not None
+    assert s.passes_filters(h) is False  # price gate, not the parser itself
+
+
+def test_vanhuyse_koop_junk_listing_filtered():
+    pytest.importorskip("scrapling.parser")
+    body = _vanhuyse_detail(address="Garagebox 3, 2611 AB Delft")
+    h = s._parse_vanhuyse_koop_listing("https://www.vanhuyse.nl/x/", body)
+    assert h is not None
+    assert h["straatnaamHuisnummer"] == "Garagebox 3"
+    assert s.passes_filters(h) is False  # junk filter, not the parser itself
+
+
+VANHUYSE_SITEMAP_INDEX = """<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://www.vanhuyse.nl/post-sitemap.xml</loc></sitemap>
+  <sitemap><loc>https://www.vanhuyse.nl/realworks_wonen-sitemap.xml</loc></sitemap>
+  <sitemap><loc>https://www.vanhuyse.nl/realworks_wonen-sitemap2.xml</loc></sitemap>
+  <sitemap><loc>https://www.vanhuyse.nl/realworks_nieuwbouw-sitemap.xml</loc></sitemap>
+</sitemapindex>
+"""
+
+VANHUYSE_WONEN_SITEMAP_1 = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/voorstraat-1/</loc></url>
+  <url><loc>https://www.vanhuyse.nl/woningen/nederland/huur/appartement/delft/achterstraat-9/</loc></url>
+  <url><loc>https://www.vanhuyse.nl/woningen/nederland/koop/appartement/haarlem/delftlaan-2/</loc></url>
+</urlset>
+"""
+
+VANHUYSE_WONEN_SITEMAP_2 = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/markt-3/</loc></url>
+</urlset>
+"""
+
+
+def test_scrape_vanhuyse_sales_filters_index_and_koop_delft(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    detail_body = _vanhuyse_detail()
+
+    def fake_vanhuyse_get(url, timeout=30):
+        if url == s.VANHUYSE_SITEMAP_INDEX_URL:
+            return VANHUYSE_SITEMAP_INDEX.encode()
+        if url == "https://www.vanhuyse.nl/realworks_wonen-sitemap.xml":
+            return VANHUYSE_WONEN_SITEMAP_1.encode()
+        if url == "https://www.vanhuyse.nl/realworks_wonen-sitemap2.xml":
+            return VANHUYSE_WONEN_SITEMAP_2.encode()
+        return detail_body
+
+    monkeypatch.setattr(s, "_vanhuyse_get", fake_vanhuyse_get)
+    houses = s.scrape_vanhuyse_sales(set())
+
+    # Only the two Delft /koop/ URLs (across both sub-sitemaps) are kept: the
+    # Delft /huur/ URL and the Haarlem "delftlaan" URL (word-boundary guard)
+    # are excluded, and the post-sitemap.xml / realworks_nieuwbouw-sitemap.xml
+    # entries in the index are never fetched at all.
+    urls = {h["url"] for h in houses}
+    assert urls == {
+        "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/voorstraat-1/",
+        "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/markt-3/",
+    }
+    for h in houses:
+        assert s.passes_filters(h) is True
+
+
+def test_scrape_vanhuyse_sales_rechecks_existing_candidates(monkeypatch):
+    pytest.importorskip("scrapling.parser")
+    fetched: list[str] = []
+    voorstraat_url = (
+        "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/"
+        "voorstraat-1/"
+    )
+    markt_url = (
+        "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/markt-3/"
+    )
+
+    def fake_vanhuyse_get(url, timeout=30):
+        fetched.append(url)
+        if url == s.VANHUYSE_SITEMAP_INDEX_URL:
+            return VANHUYSE_SITEMAP_INDEX.encode()
+        if url == "https://www.vanhuyse.nl/realworks_wonen-sitemap.xml":
+            return VANHUYSE_WONEN_SITEMAP_1.encode()
+        if url == "https://www.vanhuyse.nl/realworks_wonen-sitemap2.xml":
+            return VANHUYSE_WONEN_SITEMAP_2.encode()
+        if url == voorstraat_url:
+            # The already-known candidate went Verkocht since it was stored.
+            return _vanhuyse_detail(status="Verkocht")
+        assert url == markt_url
+        return _vanhuyse_detail()
+
+    monkeypatch.setattr(s, "_vanhuyse_get", fake_vanhuyse_get)
+    existing = {voorstraat_url}
+    houses = s.scrape_vanhuyse_sales(existing)
+
+    # The already-known Delft koop URL isn't re-returned as a "new" house...
+    assert houses == [
+        {
+            "url": "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/markt-3/",
+            "straatnaamHuisnummer": "Voorstraat 1",
+            "plaats": "2611 AB Delft",
+            "vraagprijs": "€ 235.000,- k.k.",
+            "oppervlakte": "60 m²",
+            "kamers": "2 kamers",
+        }
+    ]
+    # ... but it IS re-fetched (bounded recheck of existing candidates), and
+    # its Verkocht status was recorded via _record_sold_url.
+    assert (
+        "https://www.vanhuyse.nl/woningen/nederland/koop/appartement/delft/voorstraat-1/"
+        in fetched
+    )
