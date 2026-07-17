@@ -134,15 +134,38 @@ def is_gone(url: str) -> bool:
     )
 
 
+def _gone_marker_text(addr: str, url: str) -> str:
+    """In-place replacement text for a gone listing whose original notification
+    can't be deleted.
+
+    Telegram only lets a bot delete its own messages for 48 hours; a rental
+    that goes gone has often been on the market longer than that, so the
+    delete fails and the live notification would otherwise linger.
+    ``editMessageText`` has no such time limit, so we edit the card to mark it
+    gone instead — the group never shows a stale "available" listing.
+    """
+    return (
+        "\U0001f6d1 <b>Niet meer beschikbaar / verhuurd</b>\n"
+        f"<s>{esc(addr or url)}</s>\n"
+        f"{esc(url)}"
+    )
+
+
 def _delete_listing_messages(row) -> tuple[str, str] | None:
     """Delete the Telegram message(s) for a gone listing and mark it gone.
+
+    When ``deleteMessage`` fails (e.g. the Telegram 48h delete window has
+    passed), fall back to editing the message in place so the notification
+    never lingers as a stale live listing.
 
     Returns an ``(address, url)`` pair (for the linked summary), or None if
     there is nothing to do.
     """
     addr = row["straatnaamHuisnummer"] or row["url"]
+    marker = _gone_marker_text(addr, row["url"])
     for chat_id, message_id in json.loads(row["tg_message_ids"] or "{}").items():
-        tg.delete_message(str(chat_id), message_id)
+        if not tg.delete_message(str(chat_id), message_id):
+            tg.edit_text(str(chat_id), message_id, marker)
     db.mark_listing_gone(row["id"])
     log.info("Listing gone, deleted TG message(s): %s (%s)", addr, row["url"])
     return addr, row["url"]
