@@ -2265,6 +2265,201 @@ def scrape_psgwonen_sales(existing_urls: set[str]) -> list[dict[str, str]]:
     return houses
 
 
+# ---------------------------------------------------------------------------
+# VanHuyse koop via realworks_wonen sitemap (WordPress + WP-Realworks plugin)
+# ---------------------------------------------------------------------------
+# Yoast chunks the combined koop+huur listings sitemap at 1000 URLs/file
+# (currently two: realworks_wonen-sitemap.xml and -sitemap2.xml, with Delft
+# koop candidates split across both), so the set of sub-sitemaps is discovered
+# from sitemap_index.xml rather than hardcoded — stays correct as the listing
+# count grows past the next 1000-URL boundary. Listing URLs embed both the
+# transaction type and city as path segments
+# (".../koop/appartement/delft/straat-1/"), so candidates are filtered on the
+# URL itself before any detail fetch, same as Prinsenstad/Frisia/Marloes.
+#
+# vanhuyse.nl's WAF 403s the shared Chrome/120 UA every other CUSTOM_SITES
+# source uses (curl testing: Chrome/120 and Chrome/125 -> 403, Chrome<=110,
+# Firefox, curl's bare default UA, and Googlebot -> 200) — a Firefox UA is used
+# for this source only via _vanhuyse_get, kept separate from the shared
+# _http_get so no other source's fetch behaviour changes. One consequence: the
+# universal recheck fallback (recheck_available_listings/_sold_reason) still
+# routes through the shared _http_get and will 403 on VanHuyse URLs, so it
+# never marks a VanHuyse row sold — sold detection for this source relies
+# entirely on its own bounded existing-candidate recheck below, the same
+# pattern Prinsenstad/Frisia/Marloes/PSG Wonen already rely on.
+
+VANHUYSE_SITEMAP_INDEX_URL = "https://www.vanhuyse.nl/sitemap_index.xml"
+_VANHUYSE_WONEN_SITEMAP_RE = re.compile(r"realworks_wonen-sitemap\d*\.xml$")
+_VANHUYSE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+)
+
+
+def _vanhuyse_get(url: str, timeout: int = 30) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": _VANHUYSE_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _vanhuyse_listing_urls() -> list[str]:
+    """All <loc> URLs across every realworks_wonen-sitemap*.xml sub-sitemap."""
+    try:
+        index = _vanhuyse_get(VANHUYSE_SITEMAP_INDEX_URL)
+    except Exception as exc:
+        log.warning("VanHuyse koop: sitemap index fetch failed: %s", exc)
+        return []
+    try:
+        index_root = ET.fromstring(index)
+    except ET.ParseError as exc:
+        log.warning("VanHuyse koop: sitemap index parse failed: %s", exc)
+        return []
+
+    sub_sitemaps = [
+        loc.text
+        for sm in index_root.findall("sm:sitemap", _SITEMAP_NS)
+        if (loc := sm.find("sm:loc", _SITEMAP_NS)) is not None
+        and loc.text
+        and _VANHUYSE_WONEN_SITEMAP_RE.search(loc.text)
+    ]
+
+    all_urls: list[str] = []
+    for sitemap_url in sub_sitemaps:
+        try:
+            body = _vanhuyse_get(sitemap_url)
+        except Exception as exc:
+            log.warning(
+                "VanHuyse koop: sitemap fetch failed for %s: %s", sitemap_url, exc
+            )
+            continue
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as exc:
+            log.warning(
+                "VanHuyse koop: sitemap parse failed for %s: %s", sitemap_url, exc
+            )
+            continue
+        all_urls.extend(
+            loc.text
+            for u in root.findall("sm:url", _SITEMAP_NS)
+            if (loc := u.find("sm:loc", _SITEMAP_NS)) is not None and loc.text
+        )
+    return all_urls
+
+
+def _parse_vanhuyse_koop_listing(url: str, body: bytes) -> dict[str, str] | None:
+    """Parse a VanHuyse detail page.
+
+    Fields live as flat "<span class='label'>X: </span><span class='value'>Y
+    </span>" pairs inside one or more .kenmerken-list <ul>s (grouped under
+    Overdracht / Oppervlakte en inhoud / Indeling / ... <h3> headers — the
+    headers themselves aren't needed, every <li> across every group is
+    collected into one label->value dict). "Totaal aantal kamers" is already
+    total kamers (cross-checked live against the same page's separate "Aantal
+    slaapkamers" row — a 2-kamer flat there has 1 slaapkamer), so no
+    bedrooms_to_kamers conversion is needed. "Adres" is a single "<street>,
+    <postcode> <city>" field, split on the last comma.
+    """
+    from scrapling.parser import Adaptor
+
+    a = Adaptor(content=body, url=url)
+
+    fields: dict[str, str] = {}
+    for li in a.css(".kenmerken-list li"):
+        label_els = li.css("span.label")
+        value_els = li.css("span.value")
+        if not label_els or not value_els:
+            continue
+        label = (label_els[0].text or "").strip().rstrip(":").lower()
+        val = (value_els[0].text or "").strip() or (
+            value_els[0].get_all_text() or ""
+        ).strip()
+        if label:
+            fields.setdefault(label, val)
+
+    price = fields.get("vraagprijs", "")
+    if not price:
+        return None
+
+    status = fields.get("status", "")
+    if _SOLD_STATUS_RE.search(status):
+        _record_sold_url(url)
+        return None
+
+    address_full = fields.get("adres", "")
+    parts = [p.strip() for p in address_full.split(",") if p.strip()]
+    street = parts[0] if parts else "Onbekend"
+    city = parts[-1] if len(parts) >= 2 else ""
+
+    if city and not is_delft_city(city):
+        return None
+
+    area = ""
+    area_match = re.search(r"(\d+)\s*m", fields.get("woonoppervlakte", ""))
+    if area_match:
+        area = f"{area_match.group(1)} m²"
+
+    rooms_raw = fields.get("totaal aantal kamers", "")
+    rooms_num = re.match(r"(\d+)", rooms_raw)
+    if rooms_num:
+        n = rooms_num.group(1)
+        rooms = "1 kamer" if n == "1" else f"{n} kamers"
+    else:
+        rooms = rooms_raw
+
+    return {
+        "url": url,
+        "straatnaamHuisnummer": street or "Onbekend",
+        "plaats": city or "Delft",
+        "vraagprijs": price,
+        "oppervlakte": area,
+        "kamers": rooms,
+    }
+
+
+def scrape_vanhuyse_sales(existing_urls: set[str]) -> list[dict[str, str]]:
+    all_urls = _vanhuyse_listing_urls()
+    log.info("VanHuyse koop: sitemap has %d total URLs", len(all_urls))
+
+    candidates = [
+        u for u in all_urls if "/koop/" in u and is_delft_city(u.replace("-", " "))
+    ]
+    new_candidates = [u for u in candidates if u not in existing_urls]
+    log.info(
+        "VanHuyse koop: %d Delft koop candidates, %d new",
+        len(candidates),
+        len(new_candidates),
+    )
+
+    existing_candidates = [u for u in candidates if u in existing_urls]
+    for url in existing_candidates[:RECHECK_BATCH_SIZE]:
+        try:
+            body = _vanhuyse_get(url)
+        except Exception:
+            continue
+        try:
+            _parse_vanhuyse_koop_listing(url, body)
+        except Exception:
+            continue
+
+    houses: list[dict[str, str]] = []
+    for url in new_candidates:
+        try:
+            body = _vanhuyse_get(url)
+        except Exception as exc:
+            log.warning("VanHuyse koop: detail fetch failed for %s: %s", url, exc)
+            continue
+        try:
+            listing = _parse_vanhuyse_koop_listing(url, body)
+        except Exception as exc:
+            log.warning("VanHuyse koop: parse failed for %s: %s", url, exc)
+            continue
+        if listing is not None:
+            houses.append(listing)
+
+    log.info("VanHuyse koop: %d koop match(es)", len(houses))
+    return houses
+
+
 # StealthyFetcher-backed sites (Cloudflare / heavy JS). Each entry is
 # (name, url, parser); the parser receives a rendered page.
 SITES = [
@@ -2292,6 +2487,7 @@ CUSTOM_SITES = [
     ("Frisia Makelaars koop", scrape_frisia_sales),
     ("Marloes Makelaars koop", scrape_marloes_sales),
     ("PSG Wonen koop", scrape_psgwonen_sales),
+    ("VanHuyse Makelaars koop", scrape_vanhuyse_sales),
 ]
 
 
