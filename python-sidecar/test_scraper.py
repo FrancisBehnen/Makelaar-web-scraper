@@ -102,3 +102,122 @@ import pytest  # noqa: E402
 def test_is_junk_listing(title, expected):
     house = {"straatnaamHuisnummer": title}
     assert scraper.is_junk_listing(house) is expected
+
+
+# ---------------------------------------------------------------------------
+# Momento (Presendoo SPA — api.presendoo.app JSON, no HTML rendering)
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+
+def _momento_unit(uuid, name, price, availability="available"):
+    return {
+        "uuid": uuid,
+        "name": name,
+        "price": price,
+        "availability": availability,
+    }
+
+
+def _momento_fields_entry(unit_uuid, rooms=None, area=None):
+    fields = []
+    if rooms is not None:
+        fields.append(
+            {"external_identifier": "numberOfRooms", "value": {"raw": str(rooms)}}
+        )
+    if area is not None:
+        fields.append(
+            {"external_identifier": "livingArea", "value": {"raw": str(area)}}
+        )
+    return {"unit_uuid": unit_uuid, "fields": fields}
+
+
+def _momento_fake_http_get(units, fields_entries):
+    """Route the three plain-HTTP calls scrape_momento_via_http makes:
+    project-by-prefix lookup, the bulk units list, and the bulk per-unit
+    fields feed (bedroom count / living area)."""
+
+    def fake(url, timeout=30, cookie=None):
+        if "by-prefix" in url:
+            return json.dumps({"uuid": "proj-uuid"}).encode()
+        if "/units/fields" in url:
+            return json.dumps({"data": fields_entries, "meta": {}}).encode()
+        if url.endswith("/units"):
+            return json.dumps({"data": units, "meta": {}}).encode()
+        raise AssertionError(f"unexpected Momento URL: {url}")
+
+    return fake
+
+
+def test_momento_keeps_available_within_price_budget(monkeypatch):
+    units = [
+        _momento_unit("u1", "Prinses Alexia Promenade 5", "1265.5700"),
+        _momento_unit("u2", "Prinses Alexia Promenade 7", "2095.0000"),  # over MAX_PRICE
+        _momento_unit(
+            "u3", "Prinses Alexia Promenade 9", "1230.0500", availability="in_option"
+        ),
+        _momento_unit(
+            "u4", "Prinses Alexia Promenade 11", "1101.6500", availability="sold"
+        ),
+    ]
+    fields_entries = [
+        _momento_fields_entry("u1", rooms=0, area=33),
+        _momento_fields_entry("u2", rooms=1, area=45),
+        _momento_fields_entry("u3", rooms=1, area=45),
+        _momento_fields_entry("u4", rooms=1, area=45),
+    ]
+    monkeypatch.setattr(scraper, "_http_get", _momento_fake_http_get(units, fields_entries))
+
+    houses = scraper.scrape_momento_via_http(existing_urls=set())
+
+    assert len(houses) == 1
+    h = houses[0]
+    assert h["url"] == f"{scraper.MOMENTO_BASE_URL}/units/u1"
+    assert h["straatnaamHuisnummer"] == "Prinses Alexia Promenade 5"
+    assert h["plaats"] == "Rijswijk"
+    assert h["vraagprijs"] == "€ 1.266 p.m."
+    assert h["oppervlakte"] == "33 m²"
+    assert h["kamers"] == "Studio"
+    assert scraper.is_delft_area(h["plaats"]) is True
+
+
+def test_momento_skips_known_urls(monkeypatch):
+    units = [_momento_unit("u1", "Prinses Alexia Promenade 5", "1265.5700")]
+    fields_entries = [_momento_fields_entry("u1", rooms=0, area=33)]
+    monkeypatch.setattr(scraper, "_http_get", _momento_fake_http_get(units, fields_entries))
+
+    existing = {f"{scraper.MOMENTO_BASE_URL}/units/u1"}
+    houses = scraper.scrape_momento_via_http(existing_urls=existing)
+
+    assert houses == []
+
+
+def test_momento_bedroom_count_formats_kamers_field(monkeypatch):
+    units = [_momento_unit("u2", "Steenvoordelaan 402 F013", "1265.5700")]
+    fields_entries = [_momento_fields_entry("u2", rooms=2, area=60)]
+    monkeypatch.setattr(scraper, "_http_get", _momento_fake_http_get(units, fields_entries))
+
+    houses = scraper.scrape_momento_via_http(existing_urls=set())
+
+    assert houses[0]["kamers"] == "2 slaapkamers"
+
+
+def test_momento_project_lookup_failure_returns_empty(monkeypatch):
+    def fake(url, timeout=30, cookie=None):
+        raise OSError("boom")
+
+    monkeypatch.setattr(scraper, "_http_get", fake)
+
+    assert scraper.scrape_momento_via_http(existing_urls=set()) == []
+
+
+def test_momento_units_fetch_failure_returns_empty(monkeypatch):
+    def fake(url, timeout=30, cookie=None):
+        if "by-prefix" in url:
+            return json.dumps({"uuid": "proj-uuid"}).encode()
+        raise OSError("boom")
+
+    monkeypatch.setattr(scraper, "_http_get", fake)
+
+    assert scraper.scrape_momento_via_http(existing_urls=set()) == []

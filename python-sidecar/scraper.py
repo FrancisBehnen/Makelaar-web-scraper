@@ -172,6 +172,13 @@ SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE = int(
     os.environ.get("SCHEPVASTGOEDMANAGERS_MAX_FETCHES_PER_CYCLE", "20")
 )
 HAYMANREALESTATE_URL = "https://haymanrealestate.nl/woningen/te-huur"
+# Momento (momentoliving.com) is a Rijswijk build-to-rent complex run on
+# Presendoo, a Vue SPA that renders nothing server-side. Its data comes from a
+# separate api.presendoo.app REST API (project resolved by slug, then a bulk
+# units + units/fields feed) — see scrape_momento_via_http for the endpoints.
+MOMENTO_BASE_URL = "https://momento.presendoo.app"
+MOMENTO_API_BASE = "https://api.presendoo.app/public/api/projects"
+MOMENTO_PROJECT_SLUG = "momento"
 # Optional session cookie for Huurstunt. The site gates listing detail behind
 # an email magic-link login (no password, plus reCAPTCHA), so the session can't
 # be re-established headlessly. Capture the logged-in `Cookie:` header once from
@@ -2850,6 +2857,106 @@ def scrape_haymanrealestate_via_http(existing_urls: set[str]) -> list[dict[str, 
 
 
 # ---------------------------------------------------------------------------
+# Momento (Presendoo SPA — api.presendoo.app JSON, no rendering needed)
+# ---------------------------------------------------------------------------
+# Presendoo apps ship an empty <div id="app"> with a Vue bundle; nothing
+# lives in the server HTML. Reverse-engineered from the bundled JS: the
+# project id behind the "momento" slug is resolved via by-prefix, then the
+# unit list and a bulk per-unit fields feed are fetched with that id. All 407
+# units share two street addresses in Rijswijk (Prinses Alexia Promenade /
+# Steenvoordelaan 402) — Rijswijk is already in DELFT_AREA_CITIES, so city is
+# hardcoded rather than parsed. "availability" reuses sale-style vocabulary
+# ("sold"/"in_option"/"available") even though these are rentals; only
+# "available" units are surfaced. The units/fields feed exposes bedroom count
+# under the confusingly-named "numberOfRooms" identifier (its Dutch label is
+# "Aantal slaapkamers" — bedrooms, not total kamers) and living area under
+# "livingArea".
+def scrape_momento_via_http(existing_urls: set[str]) -> list[dict[str, str]]:
+    try:
+        project_body = _http_get(f"{MOMENTO_API_BASE}/by-prefix/{MOMENTO_PROJECT_SLUG}")
+        project_uuid = json.loads(project_body)["uuid"]
+    except Exception as exc:
+        log.warning("Momento: project lookup failed: %s", exc)
+        return []
+
+    try:
+        units_body = _http_get(f"{MOMENTO_API_BASE}/{project_uuid}/units")
+        units = json.loads(units_body).get("data", [])
+    except Exception as exc:
+        log.warning("Momento: units fetch failed: %s", exc)
+        return []
+
+    fields_by_unit: dict[str, list[dict]] = {}
+    try:
+        fields_body = _http_get(
+            f"{MOMENTO_API_BASE}/{project_uuid}/units/fields?locale=nl-NL"
+        )
+        fields_by_unit = {
+            entry["unit_uuid"]: entry.get("fields", [])
+            for entry in json.loads(fields_body).get("data", [])
+            if entry.get("unit_uuid")
+        }
+    except Exception as exc:
+        log.warning(
+            "Momento: unit fields fetch failed (room/area will be blank): %s", exc
+        )
+
+    houses: list[dict[str, str]] = []
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        uuid = unit.get("uuid", "")
+        if not uuid:
+            continue
+        url = f"{MOMENTO_BASE_URL}/units/{uuid}"
+        if url in existing_urls:
+            continue
+        if unit.get("availability") != "available":
+            continue
+
+        try:
+            price_val = int(round(float(unit.get("price") or 0)))
+        except (TypeError, ValueError):
+            price_val = 0
+        if price_val and price_val > MAX_PRICE:
+            continue
+
+        area = ""
+        rooms = ""
+        for field in fields_by_unit.get(uuid, []):
+            ext_id = field.get("external_identifier")
+            value = field.get("value") or {}
+            if ext_id == "livingArea":
+                raw = value.get("raw")
+                if raw:
+                    area = f"{raw} m²"
+            elif ext_id == "numberOfRooms":
+                raw = value.get("raw")
+                if raw is not None and str(raw).isdigit():
+                    n = int(raw)
+                    if n == 0:
+                        rooms = "Studio"
+                    elif n == 1:
+                        rooms = "1 slaapkamer"
+                    else:
+                        rooms = f"{n} slaapkamers"
+
+        houses.append({
+            "url": url,
+            "straatnaamHuisnummer": (unit.get("name") or "").strip() or "Onbekend",
+            "plaats": "Rijswijk",
+            "vraagprijs": (
+                f"€ {price_val:,} p.m.".replace(",", ".") if price_val else ""
+            ),
+            "oppervlakte": area,
+            "kamers": rooms,
+        })
+
+    log.info("Momento: %d new available listing(s)", len(houses))
+    return houses
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -2887,6 +2994,7 @@ CUSTOM_SITES = [
     ("Woonzeker", scrape_woonzeker_via_sitemap),
     ("Hayman Real Estate", scrape_haymanrealestate_via_http),
     ("Schep Vastgoedmanagers", scrape_schepvastgoedmanagers_via_sitemap),
+    ("Momento", scrape_momento_via_http),
 ]
 
 
