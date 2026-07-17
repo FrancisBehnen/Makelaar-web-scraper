@@ -390,6 +390,49 @@ def test_recheck_marks_gone_even_when_delete_fails_48h(rdb, monkeypatch):
     assert row["listing_status"] == "gone"
 
 
+def test_delete_fails_48h_falls_back_to_edit_in_place(rdb, monkeypatch):
+    # When deleteMessage fails (48h window passed), the original notification
+    # must be edited in place to mark it gone, instead of lingering as a
+    # stale "available" listing (mirrors the sales-sidecar's sold fallback).
+    _add_listing(rdb)
+    monkeypatch.setattr(tg, "delete_message", lambda cid, mid: False)
+    edits = []
+    monkeypatch.setattr(
+        tg, "edit_text",
+        lambda cid, mid, text, **kw: (edits.append((cid, mid, text)), True)[1],
+    )
+    monkeypatch.setattr(delisting, "is_gone", lambda url: True)
+
+    removed = delisting.recheck_delisted()
+
+    assert removed == [("Voorstraat 1", "https://a.nl/1")]
+    assert len(edits) == 1
+    cid, mid, text = edits[0]
+    assert cid == "-100"
+    assert mid == 42
+    assert text == delisting._gone_marker_text("Voorstraat 1", "https://a.nl/1")
+    assert "Niet meer beschikbaar / verhuurd" in text
+    assert "Voorstraat 1" in text
+    row = rdb.execute("SELECT listing_status FROM responses").fetchone()
+    assert row["listing_status"] == "gone"
+
+
+def test_delete_success_does_not_call_edit(rdb, monkeypatch):
+    # When deleteMessage succeeds, no edit fallback should ever fire.
+    _add_listing(rdb)
+    _no_delete(monkeypatch)
+    edits = []
+    monkeypatch.setattr(
+        tg, "edit_text",
+        lambda cid, mid, text, **kw: (edits.append((cid, mid, text)), True)[1],
+    )
+    monkeypatch.setattr(delisting, "is_gone", lambda url: True)
+
+    delisting.recheck_delisted()
+
+    assert edits == []
+
+
 def test_recheck_respects_batch_size(rdb, monkeypatch):
     for i in range(4):
         _add_listing(rdb, url=f"https://a.nl/{i}", addr=f"Straat {i}")
